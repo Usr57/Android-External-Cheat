@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    xmlns:tools="http://schemas.android.com/tools"
+	android:id="@+id/linearLayout"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:orientation="vertical"
+    android:gravity="center_horizontal"
+    android:padding="16dp" 
+	android:background="@drawable/animated_gradient"
+    tools:context="video.like.MainActivity">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"	
+		android:background="@null"
+        android:gravity="start|center_vertical">
+
+        <LinearLayout
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+			android:background="@null"
+            android:orientation="vertical">
+
+            <TextView
+                android:id="@+id/PackageCheckTv"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+				android:background="@null"
+                android:textSize="16sp"/>
+            <TextView
+                android:id="@+id/RootCheckTv"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"               
+				android:background="@null"
+                android:textSize="16sp"/>
+            <TextView
+                android:id="@+id/ArchitectureCheckTv"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+				android:background="@null"
+                android:textSize="16sp"/>	
+			<TextView
+				android:id="@+id/SocketCheckTv"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:background="@null"
+				android:textSize="16sp"/>	
+			<TextView
+				android:id="@+id/floatCheckTv"
+				android:layout_width="wrap_content"
+				android:layout_height="wrap_content"
+				android:background="@null"
+				android:textSize="16sp"
+				android:layout_marginTop="2dp"/>
+			
+			
+        </LinearLayout>
+
+        <ImageView
+            android:id="@+id/logoIv"
+            android:layout_width="120dp"  
+            android:layout_height="120dp"  
+			android:background="@null"
+            android:layout_marginStart="10dp"  
+            android:src="@drawable/logo" />
+    </LinearLayout>
+
+    <Button
+        android:id="@+id/OpenGameBtn"
+        android:layout_width="200dp"
+        android:layout_height="wrap_content"
+        android:text="Open game"
+        android:onClick="openGameBtn"
+        android:layout_marginTop="20dp"
+        android:textAllCaps="false"
+        android:background="@drawable/rounded_button"
+        android:textColor="#FFFFFF"/>
+
+    <Button
+        android:id="@+id/OpenLinkBtn"
+        android:layout_width="200dp"
+        android:layout_height="wrap_content"
+        android:text="Tg link"
+        android:onClick="openLinkBtn"
+        android:layout_marginTop="20dp"
+        android:textAllCaps="false"
+        android:background="@drawable/rounded_button"
+        android:textColor="#FFFFFF"/>
+	
+    <Button
+        android:id="@+id/OpenSettingsBtn"
+        android:layout_width="200dp"
+        android:layout_height="wrap_content"
+        android:text="Settings"
+        android:onClick="openSettingsBtn"
+        android:layout_marginTop="20dp"
+        android:textAllCaps="false"
+        android:background="@drawable/rounded_button"
+        android:textColor="#FFFFFF"/>
+	
+</LinearLayout>
