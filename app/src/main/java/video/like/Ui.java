@@ -55,18 +55,21 @@ public class Ui extends Service {
 
     static boolean enableBottomAnimation;
     static boolean enableAnimation;
-    static boolean enableResize;
     static boolean enableBottom;
     private SharedPreferences sharedPreferences;
 	public native void StringCases(int id, String text);
 	private ArrayList<String> shaderList = new ArrayList<String>();
 	private ArrayAdapter<String> shaderAdapter;
 
-
     private static final int CLICK_DURATION_THRESHOLD = 200;
-    private static final int TWO_COLUMN_THRESHOLD_DP = 400;
-    private int twoColumnThreshold;
-    private boolean isTwoColumnMode = false;
+    private final java.util.Map<String, java.util.List<Runnable>> subWindowItems =
+	new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, LinearLayout> subWindowContainers =
+	new java.util.LinkedHashMap<>();
+
+    private final java.util.Map<String, Button> subWindowToggles =
+	new java.util.LinkedHashMap<>();
+    private String currentSubWindow = null;
 
 	int[] rainbowColors = {
 		Color.rgb(255, 0, 0), Color.rgb(255, 140, 0), Color.rgb(255, 255, 0), Color.rgb(0, 255, 0),
@@ -74,7 +77,6 @@ public class Ui extends Service {
 		Color.rgb(255, 0, 0), Color.rgb(255, 140, 0), Color.rgb(255, 255, 0), Color.rgb(0, 255, 0),
 		Color.rgb(0, 191, 255), Color.rgb(106, 90, 205), Color.rgb(199, 21, 133), Color.rgb(255, 255, 255)
     };
-
 
     int initialAlpha = 190;
 	int newAlpha = 138;
@@ -104,7 +106,7 @@ public class Ui extends Service {
     String buttonPressedColor = "#35FFFFFF";
     String numberColor = "#FFFFFF";
 	int textGlowColor = Color.WHITE;
-	float textGlowRadius = 10.0f; 
+	float textGlowRadius = 10.0f;
     String filePath = "/data/data/" + MainActivity.packageGame + "/files/Shader.txt";
     boolean firstClick = false, secondClick = false;
     Button btn;
@@ -117,16 +119,12 @@ public class Ui extends Service {
     RelativeLayout collapsedView, expandedView, rootContainer;
     FrameLayout rootFrame;
     ImageView imageIcon;
-    View resizeHandle;
     int savedWidth, savedHeight, minWidth, minHeight;
     TextView titleTextView;
-    View.OnTouchListener floatingTouchListener, resizeTouchListener;
+    View.OnTouchListener floatingTouchListener;
     ValueAnimator colorAnimator;
 
-    ArrayList<View> allContentViews = new ArrayList<>();
-    ArrayList<View> alwaysSingleColumnViews = new ArrayList<>();
     ArrayList<TextView> categoryTextViews = new ArrayList<>();
-
 
     native void Cases(int feature, int value, Context ctx);
     native void Views(Context ctx, TextView tx, TextView tx2);
@@ -143,9 +141,8 @@ public class Ui extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
-        instance = this;     
+        instance = this;
         sharedPreferences = getSharedPreferences("config", Context.MODE_PRIVATE);
-        enableResize = sharedPreferences.getBoolean("enableResize", false);
         enableAnimation = sharedPreferences.getBoolean("enableAnimation", false);
         enableBottomAnimation = sharedPreferences.getBoolean("enableBottomAnimation", false);
         enableBottom = sharedPreferences.getBoolean("enableBottom", false);
@@ -154,7 +151,6 @@ public class Ui extends Service {
                 rainbowColors[i] = Color.WHITE;
             }
         }
-        twoColumnThreshold = dp(TWO_COLUMN_THRESHOLD_DP);
         String channelId = "overlay_channel";
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             NotificationChannel channel = new NotificationChannel(channelId, "Overlay Service", NotificationManager.IMPORTANCE_LOW);
@@ -165,7 +161,7 @@ public class Ui extends Service {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             builder = new Notification.Builder(this, channelId);
         } else {
-            builder = new Notification.Builder(this); 
+            builder = new Notification.Builder(this);
         }
 
         Notification notification = builder
@@ -177,7 +173,6 @@ public class Ui extends Service {
         initFloating();
     }
 
-
     public static Animation fadeout() {
         AlphaAnimation alphaAnimation = new AlphaAnimation((float) valueAnimZero, (float) valueAnimOne);
         alphaAnimation.setDuration((long) animationDuration);
@@ -186,7 +181,7 @@ public class Ui extends Service {
 
 	private void glowText(TextView textView, int textColor) {
         int glowColor;
-		if (textColor == Color.WHITE || textColor == Color.parseColor("#FFFFFFFF")) {    
+		if (textColor == Color.WHITE || textColor == Color.parseColor("#FFFFFFFF")) {
 			glowColor = textGlowColor;
 		} else {
 			glowColor = textColor;
@@ -282,29 +277,14 @@ public class Ui extends Service {
 					params.width = minWidth;
 					params.height = minHeight;
 					mWindowManager.updateViewLayout(mFloatingView, params);
+					closeAllSubWindows();
 					collapsedView.setVisibility(View.VISIBLE);
-					expandedView.setVisibility(View.GONE);
+					expandedView.setVisibility(View.GONE);					
+					firstClick = false;
+					secondClick = false;
 					return true;
 				}
 			});
-
-        resizeHandle = new View(baseContext);
-        resizeHandle.setBackgroundResource(R.drawable.resize_handle);
-        resizeHandle.setVisibility(View.GONE);
-        if (enableResize) {
-            resizeHandle.setVisibility(View.VISIBLE);
-        }
-        int resizeHandleSize = dp(25);
-        RelativeLayout.LayoutParams resizeParams = new RelativeLayout.LayoutParams(resizeHandleSize, resizeHandleSize);
-        resizeParams.addRule(RelativeLayout.ALIGN_PARENT_BOTTOM);
-        resizeParams.addRule(RelativeLayout.ALIGN_PARENT_RIGHT);
-        expandedView.addView(resizeHandle, resizeParams);
-
-        Drawable resizeDrawable = resizeHandle.getBackground();
-        if (resizeDrawable != null) {
-            resizeDrawable.setTint(rainbowColors[11]);
-            resizeHandle.invalidate();
-        }
 
         colorAnimator = ObjectAnimator.ofInt(titleTextView, "textColor", rainbowColors);
 
@@ -327,26 +307,19 @@ public class Ui extends Service {
 					}
 					((GradientDrawable) expandedView.getBackground()).setColors(colors);
 
-					if (enableAnimation) {					
+					if (enableAnimation) {
 						titleTextView.setShadowLayer(textGlowRadius, 0f, 0f, animatedColor);
-					} else {				
+					} else {
 						titleTextView.setShadowLayer(textGlowRadius, 0f, 0f, Color.WHITE);
 					}
 
 					for (TextView categoryTextView : categoryTextViews) {
 						if (enableAnimation) {
-							categoryTextView.setTextColor(animatedColor);					
+							categoryTextView.setTextColor(animatedColor);
 							categoryTextView.setShadowLayer(textGlowRadius, 0f, 0f, animatedColor);
-						} else {						
+						} else {
 							categoryTextView.setTextColor(Color.WHITE);
 							categoryTextView.setShadowLayer(textGlowRadius, 0f, 0f, Color.WHITE);
-						}
-					}
-					if (enableAnimation) {
-						Drawable resizeDrawable = resizeHandle.getBackground();
-						if (resizeDrawable != null) {
-							resizeDrawable.setTint(animatedColor);
-							resizeHandle.invalidate();
 						}
 					}
 				}
@@ -391,10 +364,8 @@ public class Ui extends Service {
         savedHeight = params.height;
 
         floatingTouchListener = createFloatingTouchListener();
-        resizeTouchListener = createResizeTouchListener();
 
         mFloatingView.setOnTouchListener(floatingTouchListener);
-        resizeHandle.setOnTouchListener(resizeTouchListener);
 
         titleTextView.setOnClickListener(new View.OnClickListener() {
 				@Override
@@ -405,96 +376,16 @@ public class Ui extends Service {
 					params.height = minHeight;
 					mWindowManager.updateViewLayout(mFloatingView, params);
 
+					closeAllSubWindows();
 					collapsedView.setVisibility(View.VISIBLE);
 					expandedView.setVisibility(View.GONE);
-					collapsedView.setAnimation(fadeout());
+					collapsedView.setAnimation(fadeout());				
+					firstClick = false;
+					secondClick = false;
 				}
 			});
         Views(this, titleTextView, null);
     }
-
-    private void rebuildLayout() {
-        if (allContentViews.isEmpty()) {
-            return;
-        }
-        patchContainer.removeAllViews();
-
-        boolean shouldBeTwoColumns = params.width >= twoColumnThreshold;
-        isTwoColumnMode = shouldBeTwoColumns;
-        ArrayList<View> dynamicElementsInBatch = new ArrayList<>();
-
-        for (View view : allContentViews) {
-
-            removeViewFromParent(view);
-
-            boolean isSingleColumn = alwaysSingleColumnViews.contains(view);
-
-			if (isSingleColumn || !isTwoColumnMode) {
-				if (!dynamicElementsInBatch.isEmpty()) {
-					processDynamicBatch(dynamicElementsInBatch);
-					dynamicElementsInBatch.clear();
-				}
-				LinearLayout.LayoutParams singleItemParams = new LinearLayout.LayoutParams(
-					LinearLayout.LayoutParams.MATCH_PARENT,
-					LinearLayout.LayoutParams.WRAP_CONTENT
-				);
-				if (!isSingleColumn && view instanceof LinearLayout) {
-					((LinearLayout) view).setOrientation(LinearLayout.VERTICAL);
-				}
-				view.setLayoutParams(singleItemParams);
-				patchContainer.addView(view);
-			} else {
-				dynamicElementsInBatch.add(view);
-			}
-		}
-		if (!dynamicElementsInBatch.isEmpty()) {
-			processDynamicBatch(dynamicElementsInBatch);
-		}
-	}
-
-    private void processDynamicBatch(ArrayList<View> dynamicElements) {
-        for (int i = 0; i < dynamicElements.size(); i += 2) {
-            LinearLayout rowLayout = new LinearLayout(this);
-            rowLayout.setOrientation(LinearLayout.HORIZONTAL);
-            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(
-                LinearLayout.LayoutParams.MATCH_PARENT, 
-                LinearLayout.LayoutParams.WRAP_CONTENT
-            );
-            rowLayout.setLayoutParams(rowParams);
-
-            View item1 = dynamicElements.get(i);
-            LinearLayout.LayoutParams item1Params = new LinearLayout.LayoutParams(
-                0, 
-                LinearLayout.LayoutParams.WRAP_CONTENT,
-                1.0f
-            );
-            item1.setLayoutParams(item1Params);
-            removeViewFromParent(item1);
-            rowLayout.addView(item1);
-
-            if (i + 1 < dynamicElements.size()) {
-                View item2 = dynamicElements.get(i + 1);
-                LinearLayout.LayoutParams item2Params = new LinearLayout.LayoutParams(
-                    0, 
-                    LinearLayout.LayoutParams.WRAP_CONTENT,
-                    1.0f
-                );
-                item2.setLayoutParams(item2Params);
-                rowLayout.addView(item2);
-            } else {
-                View spacer = new View(this);
-                LinearLayout.LayoutParams spacerParams = new LinearLayout.LayoutParams(
-                    0, 
-                    1,
-                    1.0f
-                );
-                spacer.setLayoutParams(spacerParams);
-                rowLayout.addView(spacer);
-            }
-            patchContainer.addView(rowLayout);
-        }
-    }
-
 
 	private View.OnTouchListener createFloatingTouchListener() {
         return new View.OnTouchListener() {
@@ -518,7 +409,7 @@ public class Ui extends Service {
 
                     case MotionEvent.ACTION_MOVE:
                         float dx = motionEvent.getRawX() - initialTouchX;
-                        float dy = motionEvent.getRawY() - initialTouchY;                    
+                        float dy = motionEvent.getRawY() - initialTouchY;
                         if (Math.abs(dx) > 10 || Math.abs(dy) > 10) {
                             isDragging = true;
                         }
@@ -529,7 +420,7 @@ public class Ui extends Service {
                         return true;
 
                     case MotionEvent.ACTION_UP:
-                        long touchDuration = System.currentTimeMillis() - touchStartTime;                     
+                        long touchDuration = System.currentTimeMillis() - touchStartTime;
                         if (touchDuration < CLICK_DURATION_THRESHOLD && !isDragging) {
                             if (secondClick) {
                                 params.width = savedWidth;
@@ -550,7 +441,6 @@ public class Ui extends Service {
                                 params.width = savedWidth > minWidth ? savedWidth : dp(250);
                                 params.height = savedHeight > minHeight ? savedHeight : dp(300);
                                 mWindowManager.updateViewLayout(mFloatingView, params);
-                                rebuildLayout();
                                 collapsedView.setVisibility(View.GONE);
                                 expandedView.setVisibility(View.VISIBLE);
                                 expandedView.setAnimation(fadeout());
@@ -567,72 +457,250 @@ public class Ui extends Service {
         };
     }
 
+    public void beginSubWindow(final String name) {
+        subWindowItems.put(name, new java.util.ArrayList<>());
+        currentSubWindow = name;
 
-    private View.OnTouchListener createResizeTouchListener() {
-        return new View.OnTouchListener() {
-            private float initialTouchX;
-            private float initialTouchY;
-            private int initialWidth;
-            private int initialHeight;
-            private long lastUpdateTime = 0;
+        final Button toggle = new Button(Ui.this);
+        glowText(toggle, Color.WHITE);
+        toggle.setText("▶ " + name + " ▶");
+        toggle.setAllCaps(false);
+        toggle.setTextColor(Color.parseColor(buttonTextColor));
+        toggle.setTextSize(14.7f);
+        toggle.setGravity(17);
+        toggle.setBackgroundColor(Color.parseColor("#00FFFFFF"));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+			LinearLayout.LayoutParams.MATCH_PARENT,
+			LinearLayout.LayoutParams.WRAP_CONTENT);
+        toggle.setLayoutParams(lp);
 
-            @Override
-            public boolean onTouch(View v, MotionEvent event) {
-                switch (event.getAction()) {
-                    case MotionEvent.ACTION_DOWN:
-                        initialWidth = params.width;
-                        initialHeight = params.height;
-                        initialTouchX = event.getRawX();
-                        initialTouchY = event.getRawY();
-                        if (colorAnimator != null) {
-                            colorAnimator.pause();
-                        }
-                        return true;
-                    case MotionEvent.ACTION_MOVE:
-                        float dx = event.getRawX() - initialTouchX;
-                        float dy = event.getRawY() - initialTouchY;
-
-                        int newWidth = initialWidth + (int) dx;
-                        int newHeight = initialHeight + (int) dy;
-                        newWidth = Math.max(newWidth, minWidth);
-                        newHeight = Math.max(newHeight, minHeight);
-                        savedWidth = newWidth;
-                        savedHeight = newHeight;
-                        secondClick = true;
-
-                        long currentTime = System.currentTimeMillis();
-                        if (currentTime - lastUpdateTime > 16) {
-                            params.width = newWidth;
-                            params.height = newHeight;
-                            mWindowManager.updateViewLayout(mFloatingView, params);
-                            lastUpdateTime = currentTime;
-                            if ((newWidth >= twoColumnThreshold) != isTwoColumnMode) {
-                                rebuildLayout();
-                            }
-                        }
-                        return true;
-                    case MotionEvent.ACTION_UP:
-                        if (colorAnimator != null) {
-                            colorAnimator.resume();
-                        }
-                        return true;
-                    default:
-                        return false;
+        final boolean[] isOpen = {false};
+        toggle.setOnClickListener(new View.OnClickListener() {
+                @Override
+                public void onClick(View v) {
+                    if (isOpen[0]) {
+                        closeSubWindow(name, toggle, isOpen);
+                    } else {
+                        openSubWindow(name, toggle, isOpen);
+                        toggle.setText("▼ " + name + " ▼");
+                        toggle.setBackgroundColor(Color.parseColor(buttonPressedColor));
+                        isOpen[0] = true;
+                    }
                 }
+            });
+
+        subWindowToggles.put(name, toggle);
+        LinearLayout.LayoutParams toggleParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        toggle.setLayoutParams(toggleParams);
+        patchContainer.addView(toggle);
+    }
+
+    public void endSubWindow(String name) {
+        currentSubWindow = null;
+    }
+
+    private final java.util.Map<String, View> subWindowViews = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, WindowManager.LayoutParams> subWindowParams = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, LinearLayout> subWindowRootCache = new java.util.LinkedHashMap<>();
+    private final java.util.Map<String, WindowManager.LayoutParams> subWindowParamsCache = new java.util.LinkedHashMap<>();
+
+    private void openSubWindow(final String name, final Button toggle, final boolean[] isOpen) {
+        if (subWindowViews.containsKey(name)) return;
+
+        int windowType = Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+			? WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY
+			: WindowManager.LayoutParams.TYPE_SYSTEM_ALERT;
+
+        final LinearLayout root;
+        final WindowManager.LayoutParams subParams;
+
+        if (subWindowRootCache.containsKey(name)) {          
+            root = subWindowRootCache.get(name);
+            subParams = subWindowParamsCache.get(name);         
+            subParams.x = params.x + params.width + dp(10);
+            subParams.y = params.y;
+        } else {          
+            int[] subColors = new int[colors.length];
+            for (int i = 0; i < subColors.length; i++) {
+                subColors[i] = Color.argb(averageAlpha, red, green, blue);
             }
-        };
+            GradientDrawable dialogBg = new GradientDrawable();
+            dialogBg.setCornerRadius(menuCornerRadius);
+            dialogBg.setColors(subColors);
+            dialogBg.setOrientation(GradientDrawable.Orientation.TOP_BOTTOM);
+            GradientDrawable dialogStroke = new GradientDrawable();
+            dialogStroke.setShape(GradientDrawable.RECTANGLE);
+            dialogStroke.setCornerRadius(menuCornerRadius);
+            dialogStroke.setStroke(strokeThickness, Color.WHITE);
 
-	}
+            root = new LinearLayout(Ui.this);
+            root.setOrientation(LinearLayout.VERTICAL);
+            root.setPadding(0, 0, 0, 16);
+            root.setBackground(dialogBg);
+            root.setForeground(dialogStroke);
 
+            final TextView titleBtn = new TextView(Ui.this);
+            glowText(titleBtn, Color.WHITE);
+            titleBtn.setTypeface(Typeface.DEFAULT_BOLD);
+            titleBtn.setGravity(Gravity.CENTER_HORIZONTAL);
+            titleBtn.setTextSize(titleTextSize);
+            titleBtn.setTextColor(Color.WHITE);
+            titleBtn.setPadding(10, 22, 10, 22);
+            titleBtn.setText(name);
+            titleBtn.setClickable(true);
+            titleBtn.setFocusable(true);
 
-    public void addCategory(String text) {        
-        TextView categoryTextView = new TextView(this);	
+            ScrollView scroll = new ScrollView(Ui.this);
+            scroll.setVerticalScrollBarEnabled(false);
+            LinearLayout itemsContainer = new LinearLayout(Ui.this);
+            itemsContainer.setOrientation(LinearLayout.VERTICAL);
+            scroll.addView(itemsContainer);
+            root.addView(titleBtn);
+            root.addView(scroll);
+
+            subWindowContainers.put(name, itemsContainer);
+
+            java.util.List<Runnable> items = subWindowItems.get(name);
+            if (items != null) {
+                for (Runnable r : items) r.run();
+            }
+
+            subParams = new WindowManager.LayoutParams(
+				params.width,
+				params.height,
+				windowType,
+				WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE |
+				WindowManager.LayoutParams.FLAG_LAYOUT_IN_OVERSCAN |
+				WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN |
+				WindowManager.LayoutParams.FLAG_SPLIT_TOUCH,
+				PixelFormat.TRANSPARENT
+            );
+            subParams.gravity = Gravity.TOP | Gravity.LEFT;
+            subParams.x = params.x + params.width + dp(10);
+            subParams.y = params.y;
+            subWindowRootCache.put(name, root);
+            subWindowParamsCache.put(name, subParams);
+
+            titleBtn.setOnTouchListener(new View.OnTouchListener() {
+					private float initTouchX, initTouchY;
+					private int initX, initY;
+					private long touchStart;
+					private boolean dragging;
+
+					@Override
+					public boolean onTouch(View v, MotionEvent e) {
+						switch (e.getAction()) {
+							case MotionEvent.ACTION_DOWN:
+								initX = subParams.x;
+								initY = subParams.y;
+								initTouchX = e.getRawX();
+								initTouchY = e.getRawY();
+								touchStart = System.currentTimeMillis();
+								dragging = false;
+								return true;
+							case MotionEvent.ACTION_MOVE:
+								float dx = e.getRawX() - initTouchX;
+								float dy = e.getRawY() - initTouchY;
+								if (Math.abs(dx) > 5 || Math.abs(dy) > 5) dragging = true;
+								subParams.x = initX + (int) dx;
+								subParams.y = initY + (int) dy;
+								mWindowManager.updateViewLayout(root, subParams);
+								return true;
+							case MotionEvent.ACTION_UP:
+								if (!dragging && System.currentTimeMillis() - touchStart < CLICK_DURATION_THRESHOLD) {
+									closeSubWindow(name, toggle, isOpen);
+								}
+								return true;
+						}
+						return false;
+					}
+				});
+        }
+
+        subWindowParams.put(name, subParams);
+        subWindowViews.put(name, root);
+        mWindowManager.addView(root, subParams);
+    }
+
+    private void closeAllSubWindows() {
+        for (java.util.Map.Entry<String, View> entry : new java.util.ArrayList<>(subWindowViews.entrySet())) {
+            String n = entry.getKey();
+            View v = entry.getValue();
+            if (v != null) {
+                try { mWindowManager.removeView(v); } catch (Exception ignored) {}
+            }
+            subWindowParams.remove(n);
+            subWindowContainers.remove(n);
+            Button toggle = subWindowToggles.get(n);
+            if (toggle != null) {
+                toggle.setText("▶ " + n + " ▶");
+                toggle.setBackgroundColor(Color.parseColor("#00FFFFFF"));
+            }
+        }
+        subWindowViews.clear();
+    }
+
+    private void closeSubWindow(String name, Button toggle, boolean[] isOpen) {
+        View v = subWindowViews.remove(name);
+        if (v != null) {
+            mWindowManager.removeView(v);
+        }
+        subWindowParams.remove(name);
+        subWindowContainers.remove(name);
+        if (toggle != null) {
+            toggle.setText("▶ " + name + " ▶");
+            toggle.setBackgroundColor(Color.parseColor("#00FFFFFF"));
+        }
+        if (isOpen != null) isOpen[0] = false;
+    }
+
+    private void closeSubWindow(String name) {
+        View v = subWindowViews.remove(name);
+        if (v != null) mWindowManager.removeView(v);
+        subWindowParams.remove(name);
+        subWindowContainers.remove(name);
+    }
+
+    public void addCategory(final String text) {
+        if (currentSubWindow != null) {
+            final String target = currentSubWindow;
+            java.util.List<Runnable> items = subWindowItems.get(target);
+            if (items != null) {
+                items.add(new Runnable() {
+						@Override
+						public void run() {
+							LinearLayout container = subWindowContainers.get(target);
+							if (container == null) return;
+							TextView tv = new TextView(Ui.this);
+							if (enableAnimation) {
+								glowText(tv, rainbowColors[0]);
+							} else {
+								glowText(tv, Color.WHITE);
+							}
+							tv.setBackgroundColor(Color.parseColor("#00FFFFFF"));
+							tv.setText(text);
+							tv.setGravity(16);
+							tv.setTextSize(13f);
+							tv.setTextColor(enableAnimation ? rainbowColors[0] : Color.WHITE);
+							tv.setTypeface(null, Typeface.BOLD);
+							tv.setPadding(12, 3, 12, 3);
+							categoryTextViews.add(tv);
+							container.addView(tv);
+						}
+					});
+            }
+            return;
+        }
+
+        TextView categoryTextView = new TextView(this);
 		if (enableAnimation) {
 			glowText(categoryTextView, rainbowColors[0]);
 		} else {
 			glowText(categoryTextView, Color.WHITE);
 		}
-
         categoryTextView.setBackgroundColor(Color.parseColor("#00FFFFFF"));
         categoryTextView.setText(text);
         categoryTextView.setGravity(16);
@@ -641,12 +709,73 @@ public class Ui extends Service {
         categoryTextView.setTypeface(null, Typeface.BOLD);
         categoryTextView.setPadding(12, 3, 12, 3);
         categoryTextViews.add(categoryTextView);
-        alwaysSingleColumnViews.add(categoryTextView);
-        allContentViews.add(categoryTextView);
-        rebuildLayout();
+        LinearLayout.LayoutParams catParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        categoryTextView.setLayoutParams(catParams);
+        patchContainer.addView(categoryTextView);
     }
 
 	public void addSeekBar(final String feature, final int progress, int max, final InterfaceInt interInt) {
+        if (currentSubWindow != null) {
+            final String target = currentSubWindow;
+            final int maxVal = max;
+            java.util.List<Runnable> items = subWindowItems.get(target);
+            if (items != null) {
+                items.add(new Runnable() {
+						@Override
+						public void run() {
+							LinearLayout container = subWindowContainers.get(target);
+							if (container == null) return;
+
+							LinearLayout seekBarContainer = new LinearLayout(Ui.this);
+							seekBarContainer.setPadding(10, 5, 0, 5);
+							seekBarContainer.setOrientation(LinearLayout.VERTICAL);
+							seekBarContainer.setGravity(Gravity.CENTER);
+							seekBarContainer.setLayoutParams(new LinearLayout.LayoutParams(-1, -2));
+							seekBarContainer.setBackgroundColor(Color.TRANSPARENT);
+
+							final TextView seekBarLabel = new TextView(Ui.this);
+							glowText(seekBarLabel, Color.WHITE);
+							seekBarLabel.setText(Html.fromHtml("<font face='roboto'>" + feature + ": <font color='#FFFFFF'>" + progress + "</font>"));
+							seekBarLabel.setTextColor(Color.WHITE);
+							seekBarLabel.setTextSize(14);
+
+							final SeekBar seekBar = new SeekBar(Ui.this);
+							seekBar.setMax(maxVal);
+							seekBar.setProgressDrawable(getResources().getDrawable(R.drawable.seekbar_progress, getTheme()));
+							seekBar.setThumb(getResources().getDrawable(R.drawable.seekbar_thumb, getTheme()));
+							seekBar.setPadding(25, 10, 35, 10);
+							LinearLayout.LayoutParams lp2 = new LinearLayout.LayoutParams(-1, LinearLayout.LayoutParams.WRAP_CONTENT);
+							lp2.bottomMargin = 10;
+							seekBar.setLayoutParams(lp2);
+							seekBar.setProgress(progress);
+
+							seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
+									public void onStartTrackingTouch(SeekBar s) {}
+									public void onStopTrackingTouch(SeekBar s) {}
+									public void onProgressChanged(SeekBar s, int i, boolean z) {
+										if (i < progress) {
+											s.setProgress(progress);
+											interInt.OnWrite(progress);
+											seekBarLabel.setText(Html.fromHtml("<font face='roboto'>" + feature + ": <font color='#FFFFFF'>" + progress + "</font>"));
+											return;
+										}
+										interInt.OnWrite(i);
+										seekBarLabel.setText(Html.fromHtml("<font face='roboto'>" + feature + ": <font color='#FFFFFF'>" + i + "</font></font>"));
+									}
+								});
+
+							seekBarContainer.addView(seekBarLabel);
+							seekBarContainer.addView(seekBar);
+							container.addView(seekBarContainer);
+						}
+					});
+            }
+            return;
+        }
+
 		LinearLayout seekBarContainer = new LinearLayout(this);
 		LinearLayout.LayoutParams layoutParams = new LinearLayout.LayoutParams(-1, -2);
 		seekBarContainer.setPadding(10, 5, 0, 5);
@@ -685,7 +814,6 @@ public class Ui extends Service {
 				}
 			});
 
-
 		final TextView finalSeekBarLabel = seekBarLabel;
 		seekBar.setOnSeekBarChangeListener(new SeekBar.OnSeekBarChangeListener() {
 				public void onStartTrackingTouch(SeekBar seekBar) {
@@ -709,13 +837,64 @@ public class Ui extends Service {
 
 		seekBarContainer.addView(seekBarLabel);
 		seekBarContainer.addView(seekBar);
-        alwaysSingleColumnViews.add(seekBarContainer);
-        allContentViews.add(seekBarContainer);
-        rebuildLayout();
+        LinearLayout.LayoutParams sbParams = new LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            LinearLayout.LayoutParams.WRAP_CONTENT
+        );
+        seekBarContainer.setLayoutParams(sbParams);
+        patchContainer.addView(seekBarContainer);
 	}
 
-
     public void addButton(String feature, final InterfaceBtn interfaceBtn) {
+        if (currentSubWindow != null) {
+            final String target = currentSubWindow;
+            final String feat = feature;
+            java.util.List<Runnable> items = subWindowItems.get(target);
+            if (items != null) {
+                items.add(new Runnable() {
+						@Override
+						public void run() {
+							LinearLayout container = subWindowContainers.get(target);
+							if (container == null) return;
+
+							final Button button = new Button(Ui.this);
+							glowText(button, Color.WHITE);
+							LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT);
+							button.setLayoutParams(lp);
+							button.setPadding(0, 0, 0, 0);
+							button.setTextColor(Color.parseColor(buttonTextColor));
+							button.setTextSize(14.7f);
+							button.setGravity(17);
+							button.setText(feat + " ");
+							button.setAllCaps(false);
+							button.setBackgroundColor(Color.parseColor("#00FFFFFF"));
+							final boolean[] isActive = {true};
+							button.setOnClickListener(new View.OnClickListener() {
+									@Override
+									public void onClick(View v) {
+										interfaceBtn.OnWrite();
+										if (isActive[0]) {
+											button.setText(feat);
+											button.setTextSize(15.5f);
+											button.setBackgroundColor(Color.parseColor(buttonPressedColor));
+											isActive[0] = false;
+										} else {
+											button.setText(feat);
+											button.setTextSize(14.7f);
+											button.setBackgroundColor(Color.parseColor("#00FFFFFF"));
+											isActive[0] = true;
+										}
+									}
+								});
+							container.addView(button);
+						}
+					});
+            }
+            return;
+        }
+
         final Button button = new Button(this);
         LinearLayout.LayoutParams layoutParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -752,12 +931,61 @@ public class Ui extends Service {
 					}
 				}
 			});
-        allContentViews.add(button);
-        rebuildLayout();
+        patchContainer.addView(button);
     }
 
-
     public void addButtonOnce(String feature, final InterfaceBtn interfaceBtn) {
+        if (currentSubWindow != null) {
+            final String target = currentSubWindow;
+            final String feat = feature;
+            java.util.List<Runnable> items = subWindowItems.get(target);
+            if (items != null) {
+                items.add(new Runnable() {
+						@Override
+						public void run() {
+							LinearLayout container = subWindowContainers.get(target);
+							if (container == null) return;
+
+							final Button button = new Button(Ui.this);
+							glowText(button, Color.WHITE);
+							LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
+                                LinearLayout.LayoutParams.MATCH_PARENT,
+                                LinearLayout.LayoutParams.WRAP_CONTENT);
+							button.setLayoutParams(lp);
+							button.setPadding(0, 0, 0, 0);
+							button.setTextColor(Color.parseColor(buttonTextColor));
+							button.setTextSize(14.7f);
+							button.setGravity(17);
+							button.setText(feat + " ");
+							button.setAllCaps(false);
+							button.setBackgroundColor(Color.parseColor("#00FFFFFF"));
+							button.setOnClickListener(new View.OnClickListener() {
+									private boolean isActive = true;
+									@Override
+									public void onClick(View v) {
+										if (isActive) {
+											interfaceBtn.OnWrite();
+											button.setText(feat);
+											button.setTextSize(15.5f);
+											button.setBackgroundColor(Color.parseColor(buttonPressedColor));
+											new Handler().postDelayed(new Runnable() {
+													@Override
+													public void run() {
+														button.setText(feat);
+														button.setTextSize(14.7f);
+														button.setBackgroundColor(Color.parseColor("#00FFFFFF"));
+													}
+												}, 250);
+										}
+									}
+								});
+							container.addView(button);
+						}
+					});
+            }
+            return;
+        }
+
         final Button button = new Button(this);
         LinearLayout.LayoutParams layoutParams = new LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT,
@@ -781,7 +1009,7 @@ public class Ui extends Service {
 					if (isActive) {
 						interfaceBtn.OnWrite();
 						button.setText(buttonText);
-						button.setTextSize(15.5f);                    
+						button.setTextSize(15.5f);
 						button.setBackgroundColor(Color.parseColor(buttonPressedColor));
 						new Handler().postDelayed(new Runnable() {
 								@Override
@@ -794,8 +1022,7 @@ public class Ui extends Service {
 					}
 				}
 			});
-        allContentViews.add(button);
-        rebuildLayout();
+        patchContainer.addView(button);
     }
 
     public void addEditText(final String featName, final InterfaceStr interfaceStr) {
@@ -849,7 +1076,7 @@ public class Ui extends Service {
 								String str = editText.getText().toString();
 								button.setText(Html.fromHtml(featName + ": <font color='" + numberColor + "'>" + str + "</font>"));
 								interfaceStr.OnWrite(str);
-								editText.setFocusable(false);							
+								editText.setFocusable(false);
 							}
 						});
 
@@ -860,7 +1087,7 @@ public class Ui extends Service {
 							}
 						});
 
-					AlertDialog dialog = alertName.create(); 
+					AlertDialog dialog = alertName.create();
 					if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
 						dialog.getWindow().setType(WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY);
 					} else {
@@ -872,8 +1099,7 @@ public class Ui extends Service {
 			});
 
         linearLayout.addView(button);
-        allContentViews.add(linearLayout);
-        rebuildLayout();
+        patchContainer.addView(linearLayout);
     }
 
 	public void addSelector(final String featName, final String[] items, final InterfaceInt interfaceInt) {
@@ -903,7 +1129,7 @@ public class Ui extends Service {
 					builder.setTitle("Select " + featName);
 					builder.setAdapter(new ArrayAdapter<>(Ui.this, android.R.layout.simple_list_item_1, items), new DialogInterface.OnClickListener() {
 							@Override
-							public void onClick(DialogInterface dialog, int which) {							
+							public void onClick(DialogInterface dialog, int which) {
 								button.setText(Html.fromHtml(featName + ": <font color='" + numberColor + "'>" + items[which] + "</font>"));
 								interfaceInt.OnWrite(which);
 							}
@@ -920,10 +1146,8 @@ public class Ui extends Service {
 			});
 
 		linearLayout.addView(button);
-		allContentViews.add(linearLayout);
-		rebuildLayout();
+		patchContainer.addView(linearLayout);
 	}
-
 
 	public void addShaderSelector(final String featName, final InterfaceStr interfaceStr) {
 		LinearLayout linearLayout = new LinearLayout(this);
@@ -948,7 +1172,7 @@ public class Ui extends Service {
 		button.setOnClickListener(new View.OnClickListener() {
 				@Override
 				public void onClick(View view) {
-					if (shaderList.isEmpty()) {					
+					if (shaderList.isEmpty()) {
 						return;
 					}
 
@@ -974,8 +1198,7 @@ public class Ui extends Service {
 			});
 
 		linearLayout.addView(button);
-		allContentViews.add(linearLayout);
-		rebuildLayout();
+		patchContainer.addView(linearLayout);
 	}
 
 	public void updateShaderList(final String shaderName) {
@@ -992,17 +1215,13 @@ public class Ui extends Service {
 			});
 	}
 
-
     public boolean isViewCollapsed() {
         return mFloatingView == null || collapsedView.getVisibility() == View.VISIBLE;
     }
 
-
-
     private int dp(int i) {
         return (int) TypedValue.applyDimension(1, (float) i, getResources().getDisplayMetrics());
     }
-
 
     public InterfaceInt INT(final int z1) {
         return new InterfaceInt() {
@@ -1040,7 +1259,6 @@ public class Ui extends Service {
 		};
 	}
 
-
     private interface InterfaceBtn {
         void OnWrite();
     }
@@ -1057,21 +1275,6 @@ public class Ui extends Service {
         void OnWrite(String s);
     }
 
-    private void removeViewFromParent(View view) {
-        if (view != null) {
-            ViewGroup parent = (ViewGroup) view.getParent();
-            if (parent != null) {
-                parent.removeView(view);
-            }
-        }
-    }
-
-    public void applyResizeSetting(boolean enabled) {
-        if (resizeHandle != null) {
-            resizeHandle.setVisibility(enabled ? View.VISIBLE : View.GONE);
-        }
-    }
-
     public void applyAnimationSetting(boolean enabled) {
         if (!enabled) {
             if (colorAnimator != null) colorAnimator.cancel();
@@ -1086,8 +1289,6 @@ public class Ui extends Service {
 							categoryTextView.setTextColor(Color.WHITE);
 							categoryTextView.setShadowLayer(textGlowRadius, 0f, 0f, Color.WHITE);
 						}
-						Drawable rd = resizeHandle.getBackground();
-						if (rd != null) { rd.setTint(Color.WHITE); resizeHandle.invalidate(); }
 						GradientDrawable strokeDrawable = (GradientDrawable) expandedView.getForeground();
 						if (strokeDrawable != null) strokeDrawable.setStroke(strokeThickness, Color.WHITE);
 					}
@@ -1119,8 +1320,6 @@ public class Ui extends Service {
 							categoryTextView.setTextColor(animatedColor);
 							categoryTextView.setShadowLayer(textGlowRadius, 0f, 0f, animatedColor);
 						}
-						Drawable rd = resizeHandle.getBackground();
-						if (rd != null) { rd.setTint(animatedColor); resizeHandle.invalidate(); }
 					}
 				});
             colorAnimator.setDuration(animationSpeed);
@@ -1145,8 +1344,14 @@ public class Ui extends Service {
     public void onDestroy() {
         super.onDestroy();
         instance = null;
+        for (View subView : subWindowViews.values()) {
+            try { mWindowManager.removeView(subView); } catch (Exception ignored) {}
+        }
+        subWindowViews.clear();
+        subWindowRootCache.clear();
+        subWindowParamsCache.clear();
         if (mWindowManager != null && mFloatingView != null) {
-            mWindowManager.removeView(mFloatingView);		
+            mWindowManager.removeView(mFloatingView);
             mFloatingView = null;
 			System.exit(0);
         }
@@ -1155,4 +1360,7 @@ public class Ui extends Service {
         }
     }
 }
+
+
+
 
