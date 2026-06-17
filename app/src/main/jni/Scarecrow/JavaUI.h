@@ -77,6 +77,19 @@ void Title(JNIEnv *env, jobject obj, const char* text){
 }
 
 
+void NewWindow(JNIEnv *env, jobject ctx, const char *name) {
+    jclass Main = env->GetObjectClass(ctx);
+    jmethodID method = env->GetMethodID(Main, ("beginSubWindow"), ("(Ljava/lang/String;)V"));
+    env->CallVoidMethod(ctx, method, env->NewStringUTF(name));
+}
+
+
+void CloseNewWindow(JNIEnv *env, jobject ctx, const char *name) {
+    jclass Main = env->GetObjectClass(ctx);
+    jmethodID method = env->GetMethodID(Main, ("endSubWindow"), ("(Ljava/lang/String;)V"));
+    env->CallVoidMethod(ctx, method, env->NewStringUTF(name));
+}
+
 
 void setDialog(jobject ctx, JNIEnv *env, const char *title, const char *msg){
     jclass Alert = env->FindClass(("android/app/AlertDialog$Builder"));
@@ -166,5 +179,3 @@ JNIEXPORT void JNICALL
 Java_video_like_MainActivity_checkFloating(JNIEnv *env, jobject thiz, jobject ctx) {
     CheckFloatingPermison(env, ctx);
 }
-
-
