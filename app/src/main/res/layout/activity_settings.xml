@@ -27,14 +27,6 @@
             android:orientation="vertical">
 			
 			<CheckBox
-				android:id="@+id/ResizeHandleCb"
-				android:layout_width="wrap_content"
-				android:layout_height="wrap_content"
-				android:text="Resize handle"	
-				android:layout_marginTop="30dp"      			
-				android:textColor="#FFFFFF"/>		
-			
-			<CheckBox
 				android:id="@+id/BottomCb"
 				android:layout_width="wrap_content"
 				android:layout_height="wrap_content"
