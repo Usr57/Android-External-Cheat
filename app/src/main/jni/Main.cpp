@@ -3,7 +3,7 @@
 std::string packageName = "com.mayoninjagames.zombiecubes2";
 std::string appUrl = "https://t.me/User5577akaVlad";
 
-bool editValues, editHex, editParameters, hookMethod, hookFields = false;
+bool editValues, editValuesFreeze, editHex, editParameters, hookMethod, hookFields = false;
 int points1, points2 = 10;
 
 
@@ -16,12 +16,18 @@ Java_video_like_Ui_Views(JNIEnv *env, jobject thiz, jobject ctx, jobject title, 
     Title(env, title, ("By User5577"));
 
     Category(env, ctx, ("Full external:"));
-    Button(env, ctx, ("Values"), 1);
-    Button(env, ctx, ("Hex patch"), 2);
-    Button(env, ctx, ("Hook method"), 3);
-    Button(env, ctx, ("Hook field"), 4);
+	
+	NewWindow(env, ctx, ("Values"));
+    Button(env, ctx, ("Edit values"), 1);
+	Button(env, ctx, ("Freeze values"), 2);
+	ButtonOnce(env, ctx, ("Add values"), 3);
+	CloseNewWindow(env, ctx, ("Values"));
+	
+    Button(env, ctx, ("Hex patch"), 4);
+    Button(env, ctx, ("Hook method"), 5);
+    Button(env, ctx, ("Hook field"), 6);
     Category(env, ctx, ("Chams Menu:"));
-    ButtonOnce(env, ctx, ("Inject chams lib"), 5);
+    ButtonOnce(env, ctx, ("Inject chams lib"), 7);
     const char* chamsModes[] = {
         "Off",
         "Default",
@@ -32,10 +38,10 @@ Java_video_like_Ui_Views(JNIEnv *env, jobject thiz, jobject ctx, jobject title, 
         "Vis Check Shading",
         "Vis Check Shading Outline"
     };
-    ModeSelector(env, ctx, "Chams Mode", chamsModes, 8, 6);
-    Seekbar(env, ctx, ("Max Points"), 10, 100000, 7);
-    Seekbar(env, ctx, ("Min Points"), 10, 100000, 8);
-    ShaderSelector(env, ctx, ("Shader name"), 9); 
+    ModeSelector(env, ctx, "Chams Mode", chamsModes, 8, 8);
+    Seekbar(env, ctx, ("Max Points"), 10, 100000, 9);
+    Seekbar(env, ctx, ("Min Points"), 10, 100000, 10);
+    ShaderSelector(env, ctx, ("Shader name"), 11); 
 }
 
 
@@ -54,7 +60,19 @@ Java_video_like_Ui_Cases(JNIEnv *env, jobject thiz, jint feature, jint value, jo
 				Command("ExampleOff");
             break;
 			
-        case 2:
+		case 2:
+            editValuesFreeze = !editValuesFreeze;	
+            if (editValuesFreeze) 
+				Command("ExampleFreeze");
+            else 
+				Command("ExampleFreezeOff");
+            break;
+			
+		case 3:          
+				Command("ExampleAdd");
+            break;
+			
+        case 4:
             editHex = !editHex;	
             if (editHex) 
 				Command("HexPatchOn"); 
@@ -62,9 +80,8 @@ Java_video_like_Ui_Cases(JNIEnv *env, jobject thiz, jint feature, jint value, jo
 				Command("HexPatchOff"); 
             break;
 			
-        
-			
-        case 3:
+        		
+        case 5:
             hookMethod = !hookMethod;
             if (hookMethod) 
 				Command("HookMethodOn"); 
@@ -72,7 +89,7 @@ Java_video_like_Ui_Cases(JNIEnv *env, jobject thiz, jint feature, jint value, jo
 				Command("HookMethodOff"); 
             break;
 			
-        case 4:
+        case 6:
             hookFields = !hookFields;
             if (hookFields) 
 				Command("HookFieldOn");
@@ -80,25 +97,25 @@ Java_video_like_Ui_Cases(JNIEnv *env, jobject thiz, jint feature, jint value, jo
 				Command("HookFieldOff");
             break;
 			
-        case 5:
+        case 7:
             injectSO(packageName, "libmain.so"); 
             break;
 			
-        case 6:
+        case 8:
             chamsWrite(std::to_string(value) + "\n");
             break;
 			
-        case 7:
+        case 9:
             points1 = value;
             pointsWrite(points1, points2);
             break;
 			
-        case 8:
+        case 10:
             points2 = value;
             pointsWrite(points1, points2);
             break;
 			
-        case 9:
+        case 11:
             break;
         }
     }).detach();
