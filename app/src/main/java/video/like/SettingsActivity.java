@@ -24,18 +24,15 @@ public class SettingsActivity extends Activity {
 
         sharedPreferences = getSharedPreferences("config", Context.MODE_PRIVATE);
 
-        resizeHandleCb = findViewById(R.id.ResizeHandleCb);
         rgbCb = findViewById(R.id.RGBCb);
         bottomRGBCb = findViewById(R.id.BottomRGBCb);
         bottomCb = findViewById(R.id.BottomCb);
 
-        setCheckboxColor(resizeHandleCb);
         setCheckboxColor(rgbCb);
         setCheckboxColor(bottomRGBCb);
         setCheckboxColor(bottomCb);
 
-        boolean enableResize = sharedPreferences.getBoolean("enableResize", false);
-        resizeHandleCb.setChecked(enableResize);
+        
 
         boolean enableAnimation = sharedPreferences.getBoolean("enableAnimation", false);
         rgbFlag = sharedPreferences.getBoolean("enableAnimation", false);
@@ -49,19 +46,7 @@ public class SettingsActivity extends Activity {
         bottomCb.setChecked(enableBottom);
 
 
-        updateBottomRGBCbVisibility();
-
-        resizeHandleCb.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-				@Override
-				public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
-					SharedPreferences.Editor editor = sharedPreferences.edit();
-					editor.putBoolean("enableResize", isChecked);
-					editor.apply();
-					Ui.enableResize = isChecked;
-					Ui instance = Ui.getInstance();
-					if (instance != null) instance.applyResizeSetting(isChecked);
-				}
-			});
+        updateBottomRGBCbVisibility();       
 
 		rgbCb.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
 				@Override
