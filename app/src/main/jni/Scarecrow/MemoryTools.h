@@ -1,11 +1,56 @@
 #include <stdio.h>
 #include <unistd.h>
 #include <stdlib.h>
+#include <sys/uio.h>
 #include <fcntl.h>
 #include <dirent.h>
 #include <string.h>
 #include <errno.h>
 #include <pthread.h>
+
+extern pid_t vm_pid;   
+
+static inline ssize_t vm_read(pid_t pid, void *buf, size_t len, uintptr_t addr)
+{
+    struct iovec local  = { buf,           len };
+    struct iovec remote = { (void *)addr,  len };
+    return process_vm_readv(pid, &local, 1, &remote, 1, 0);
+}
+
+static inline ssize_t vm_write(pid_t pid, const void *buf, size_t len, uintptr_t addr)
+{
+    struct iovec local  = { (void *)buf,   len };
+    struct iovec remote = { (void *)addr,  len };
+    return process_vm_writev(pid, &local, 1, &remote, 1, 0);
+}
+
+extern int handle;  
+
+static inline ssize_t vm_read_old(void *buf, size_t len, uintptr_t addr)
+{
+    return pread64(handle, buf, len, (off64_t)addr);
+}
+
+static inline ssize_t vm_write_old(const void *buf, size_t len, uintptr_t addr)
+{
+    return pwrite64(handle, buf, len, (off64_t)addr);
+}
+
+static inline ssize_t mem_read(void *buf, size_t len, uintptr_t addr)
+{
+    extern int MemorySearchRange;
+    if (MemorySearchRange == 5 )
+        return vm_read_old(buf, len, addr);
+    return vm_read(vm_pid, buf, len, addr);
+}
+
+static inline ssize_t mem_write(const void *buf, size_t len, uintptr_t addr)
+{
+    extern int MemorySearchRange;
+    if (MemorySearchRange == 5 )
+        return vm_write_old(buf, len, addr);
+    return vm_write(vm_pid, buf, len, addr);
+}
 using namespace std;
 struct MAPS
 {
@@ -94,14 +139,15 @@ int Freeze = 0;
 pthread_t pth;
 char bm[64];
 long int delay = 30000;
-int handle;
+pid_t vm_pid = 0;   
 int ResCount = 0;
 int gs = 0;
 int MemorySearchRange = 0;
 int ms = 0;
 int SetTextColor(int color);
 int getPID(char bm[64]);
-void initXMemoryTools(char *argv[], char *bm, char *mode);
+void initXMemoryToolsOld(char *b, char *mode);
+void initXMemoryTools(char *b, char *mode);
 int SetSearchRange(int type);
 PMAPS readmaps(int type);
 PMAPS readmaps_all();
@@ -113,6 +159,27 @@ PMAPS readmaps_code_app();
 PMAPS readmaps_c_data();
 PMAPS readmaps_c_heap();
 PMAPS readmaps_java_heap();
+#ifndef PAGE_SIZE
+#define PAGE_SIZE 4096
+#endif
+
+#ifndef PAGEINFO_DEFINED
+#define PAGEINFO_DEFINED
+typedef struct {
+    bool present;
+    bool swapped;
+    bool soft_dirty;
+    uint64_t pfn;
+} PageInfo;
+#endif
+
+typedef enum {
+    FILTER_PRESENT    = 1 << 0,
+    FILTER_SWAPPED    = 1 << 1,
+    FILTER_SOFT_DIRTY = 1 << 2,
+} PageFilter;
+
+PMAPS readmaps_a_anonmyous(PageFilter filter);
 PMAPS readmaps_a_anonmyous();
 PMAPS readmaps_code_system();
 PMAPS readmaps_stack();
@@ -184,7 +251,6 @@ int killprocess(char *bm);
 char GetProcessState(char *bm);
 int killGG();
 int killXs();
-int killLOL();
 int uninstallapk(char *bm);
 int installapk(char *lj);
 int rebootsystem();
@@ -236,17 +302,42 @@ void initXMemoryTools(char *b, char *mode)
 	{
 		printf("\033[31;1m");
 		puts("Gagal mendapatkan proses!");
+		return;
 	}
+	vm_pid = pid;
+    printf("\033[32;1mSUCCESS: process_vm_readv/writev готов, PID: %d\n", vm_pid);
+}
+
+int handle;
+
+void initXMemoryToolsOld(char *b, char *mode)
+{
+	strcpy(bm, b);
+	if (strcmp(mode, MODE_ROOT) == 0)
+	{
+		if (getuid() != 0)
+		{
+			system("echo starting");
+		}
+	}
+	pid_t pid = getPID(b);
+	if (pid == 0)
+	{
+		printf("\033[31;1m");
+		puts("Gagal mendapatkan proses!");
+		return;
+	}
+	vm_pid = pid;  
 	char lj[64];
 	sprintf(lj, "/proc/%d/mem", pid);
 	handle = open(lj, O_RDWR);
 	if (handle == -1)
 	{
 		printf("\033[31;1m");
-		perror("FATAL ERROR: Gagal mendapatkan memory (/proc/PID/mem)"); 
+		perror("FATAL ERROR: Gagal mendapatkan memory (/proc/PID/mem)");
+		return;
 	}
-    printf("\033[32;1mSUCCESS: Память процесса успешно открыта! Handle: %d\n", handle);
-	lseek(handle, 0, SEEK_SET);
+	printf("\033[32;1mSUCCESS: Память процесса успешно открыта! Handle: %d, PID: %d\n", handle, vm_pid);
 }
 int GetResultCount()
 {
@@ -259,37 +350,37 @@ bool snowpd(long int a2)
 DWORD GetAddressValue_DWORD(ADDRESS addr)
 {
 	DWORD buf;
-	pread64(handle, &buf, sizeof(DWORD), addr);
+	mem_read( &buf, sizeof(DWORD), addr);
 	return buf;
 }
 FLOAT GetAddressValue_FLOAT(ADDRESS addr)
 {
 	FLOAT buf;
-	pread64(handle, &buf, sizeof(FLOAT), addr);
+	mem_read( &buf, sizeof(FLOAT), addr);
 	return buf;
 }
 DOUBLE GetAddressValue_DOUBLE(ADDRESS addr)
 {
 	DOUBLE buf;
-	pread64(handle, &buf, sizeof(DOUBLE), addr);
+	mem_read( &buf, sizeof(DOUBLE), addr);
 	return buf;
 }
 WORD GetAddressValue_WORD(ADDRESS addr)
 {
 	WORD buf;
-	pread64(handle, &buf, sizeof(WORD), addr);
+	mem_read( &buf, sizeof(WORD), addr);
 	return buf;
 }
 BYTE GetAddressValue_BYTE(ADDRESS addr)
 {
 	BYTE buf;
-	pread64(handle, &buf, sizeof(BYTE), addr);
+	mem_read( &buf, sizeof(BYTE), addr);
 	return buf;
 }
 QWORD GetAddressValue_QWORD(ADDRESS addr)
 {
 	QWORD buf;
-	pread64(handle, &buf, sizeof(QWORD), addr);
+	mem_read( &buf, sizeof(QWORD), addr);
 	return buf;
 }
 char *GetAddressValue(ADDRESS addr, int type)
@@ -429,12 +520,7 @@ int SetTextColor(COLOR color)
 }
 long int GetModuleBase(char *module, char *flags, int MapSize)
 {
-	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
-	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(MapSize);
 	FILE *fp;
-	int flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -442,33 +528,21 @@ long int GetModuleBase(char *module, char *flags, int MapSize)
 	if (fp == NULL)
 	{
 		printf("\033[31;1m");
-		perror("FATAL ERROR: Не удалось открыть /proc/PID/maps"); 
+		perror("FATAL ERROR: Не удалось открыть /proc/PID/maps");
 		return 0;
 	}
-    printf("\033[32;1mDEBUG: /proc/PID/maps успешно открыт.\n");
-	while (!feof(fp))
+	printf("\033[32;1mDEBUG: /proc/PID/maps успешно открыт.\n");
+	long int result = 0;
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, flags) != NULL && !feof(fp) && strstr(buff, module))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			pNew->next = NULL;
-			pEnd = pNew;
-			pHead = pNew;
-			pNew = (PMAPS) malloc(MapSize);
-		}
+		if (strstr(buff, flags) == NULL || strstr(buff, module) == NULL) continue;
+		uintptr_t start = 0, end = 0;
+		sscanf(buff, "%lx-%lx", &start, &end);
+		result = (long int)start;
+		break;
 	}
-	free(pNew);
 	fclose(fp);
-	return pHead->addr;
+	return result;
 }
 int getPID(PACKAGENAME * PackageName)
 {
@@ -659,7 +733,7 @@ PMAPS BaseAddressSearch_DWORD(DWORD value, ADDRESS BaseAddr, PMAPS pMap)
 		for (int j = 0; j < c; j++)
 		{
 			ADDR = pTemp->addr + j * 4096 + BaseAddr;
-			pread64(handle, BUF, 8, ADDR);
+			mem_read( BUF, 8, ADDR);
 			if (*(DWORD *) & BUF[0] == value)
 			{
 				iCount++;
@@ -700,7 +774,7 @@ PMAPS BaseAddressSearch_DOUBLE(DOUBLE value, ADDRESS BaseAddr, PMAPS pMap)
 		for (int j = 0; j < c; j++)
 		{
 			ADDR = pTemp->addr + j * 4096 + BaseAddr;
-			pread64(handle, BUF, 8, ADDR);
+			mem_read( BUF, 8, ADDR);
 			if (*(DOUBLE *) & BUF[0] == value)
 			{
 				iCount++;
@@ -741,7 +815,7 @@ PMAPS BaseAddressSearch_FLOAT(FLOAT value, ADDRESS BaseAddr, PMAPS pMap)
 		for (int j = 0; j < c; j++)
 		{
 			ADDR = pTemp->addr + j * 4096 + BaseAddr;
-			pread64(handle, BUF, 8, ADDR);
+			mem_read( BUF, 8, ADDR);
 			if (*(FLOAT *) & BUF[0] == value)
 			{
 				iCount++;
@@ -782,7 +856,7 @@ PMAPS BaseAddressSearch_WORD(WORD value, ADDRESS BaseAddr, PMAPS pMap)
 		for (int j = 0; j < c; j++)
 		{
 			ADDR = pTemp->addr + j * 4096 + BaseAddr;
-			pread64(handle, BUF, 8, ADDR);
+			mem_read( BUF, 8, ADDR);
 			if (*(WORD *) & BUF[0] == value)
 			{
 				iCount++;
@@ -823,7 +897,7 @@ PMAPS BaseAddressSearch_QWORD(QWORD value, ADDRESS BaseAddr, PMAPS pMap)
 		for (int j = 0; j < c; j++)
 		{
 			ADDR = pTemp->addr + j * 4096 + BaseAddr;
-			pread64(handle, BUF, 8, ADDR);
+			mem_read( BUF, 8, ADDR);
 			if (*(QWORD *) & BUF[0] == value)
 			{
 				iCount++;
@@ -864,7 +938,7 @@ PMAPS BaseAddressSearch_BYTE(BYTE value, ADDRESS BaseAddr, PMAPS pMap)
 		for (int j = 0; j < c; j++)
 		{
 			ADDR = pTemp->addr + j * 4096 + BaseAddr;
-			pread64(handle, BUF, 8, ADDR);
+			mem_read( BUF, 8, ADDR);
 			if (*(BYTE *) & BUF[0] == value)
 			{
 				iCount++;
@@ -1018,7 +1092,7 @@ PMAPS RangeMemorySearch_DWORD(DWORD from_value, DWORD to_value, PMAPS pMap)
 		c = (pTemp->taddr - pTemp->addr) / 4096;
 		for (int j = 0; j < c; j++)
 		{
-			pread64(handle, buff, 0x1000, pTemp->addr + j * 4096);
+			mem_read( buff, 0x1000, pTemp->addr + j * 4096);
 			for (int i = 0; i < 1024; i++)
 			{
 				if (buff[i] >= from_value && buff[i] <= to_value)
@@ -1051,262 +1125,142 @@ PMAPS RangeMemorySearch_DWORD(DWORD from_value, DWORD to_value, PMAPS pMap)
 PMAPS RangeMemorySearch_FLOAT(FLOAT from_value, FLOAT to_value, PMAPS pMap)
 {
 	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
+	if (pid == 0) { puts("获取进程失败!"); return NULL; }
+	PMAPS pHead = NULL, pTail = NULL;
 	int iCount = 0;
-	int c;
 	FLOAT buff[1024] = { 0 };
-	while (pTemp->next != NULL)
+	for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
 	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
+		int c = (pTemp->taddr - pTemp->addr) / 4096;
+		for (int j = 0; j < c; j++)
 		{
-			pread64(handle, buff, 0x1000, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
+			mem_read( buff, 0x1000, pTemp->addr + (j * 4096));
+			for (int i = 0; i < 1024; i++)
 			{
 				if (buff[i] >= from_value && buff[i] <= to_value)
-				{				
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_FLOAT;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
+				{
+					iCount++; gs++;
+					PMAPS pNew = (PMAPS) malloc(LEN); if (!pNew) goto done_rf;
+					pNew->addr = pTemp->addr + (j * 4096) + (i * sizeof(FLOAT));
+					pNew->type = TYPE_FLOAT; pNew->next = NULL;
+					if (!pHead) { pHead = pTail = pNew; } else { pTail->next = pNew; pTail = pNew; }
 				}
 			}
 		}
-		pTemp = pTemp->next;
 	}
-	free(n);
-	return pBuff;
+done_rf: return pHead;
 }
 PMAPS RangeMemorySearch_DOUBLE(DOUBLE from_value, DOUBLE to_value, PMAPS pMap)
 {
 	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
+	if (pid == 0) { puts("获取进程失败!"); return NULL; }
+	PMAPS pHead = NULL, pTail = NULL;
 	int iCount = 0;
-	int c;
-	DOUBLE buff[1024] = { 0 };
-	while (pTemp->next != NULL)
+	DOUBLE buff[512] = { 0 };
+	for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
 	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
+		int c = (pTemp->taddr - pTemp->addr) / 4096;
+		for (int j = 0; j < c; j++)
 		{
-			pread64(handle, buff, 0x1000, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
+			mem_read( buff, 0x1000, pTemp->addr + (j * 4096));
+			for (int i = 0; i < 512; i++)
 			{
 				if (buff[i] >= from_value && buff[i] <= to_value)
-				{				
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_DOUBLE;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
+				{
+					iCount++; gs++;
+					PMAPS pNew = (PMAPS) malloc(LEN); if (!pNew) goto done_rd;
+					pNew->addr = pTemp->addr + (j * 4096) + (i * sizeof(DOUBLE));
+					pNew->type = TYPE_DOUBLE; pNew->next = NULL;
+					if (!pHead) { pHead = pTail = pNew; } else { pTail->next = pNew; pTail = pNew; }
 				}
 			}
 		}
-		pTemp = pTemp->next;
 	}
-	free(n);
-	return pBuff;
+done_rd: return pHead;
 }
 PMAPS RangeMemorySearch_WORD(WORD from_value, WORD to_value, PMAPS pMap)
 {
 	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
+	if (pid == 0) { puts("获取进程失败!"); return NULL; }
+	PMAPS pHead = NULL, pTail = NULL;
 	int iCount = 0;
-	int c;
-	WORD buff[1024] = { 0 };
-	while (pTemp->next != NULL)
+	WORD buff[2048] = { 0 };
+	for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
 	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
+		int c = (pTemp->taddr - pTemp->addr) / 4096;
+		for (int j = 0; j < c; j++)
 		{
-			pread64(handle, buff, 0x800, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
+			mem_read( buff, 0x1000, pTemp->addr + (j * 4096));
+			for (int i = 0; i < 2048; i++)
 			{
 				if (buff[i] >= from_value && buff[i] <= to_value)
-				{				
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_WORD;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
+				{
+					iCount++; gs++;
+					PMAPS pNew = (PMAPS) malloc(LEN); if (!pNew) goto done_rw;
+					pNew->addr = pTemp->addr + (j * 4096) + (i * sizeof(WORD));
+					pNew->type = TYPE_WORD; pNew->next = NULL;
+					if (!pHead) { pHead = pTail = pNew; } else { pTail->next = pNew; pTail = pNew; }
 				}
 			}
 		}
-		pTemp = pTemp->next;
 	}
-	free(n);
-	return pBuff;
+done_rw: return pHead;
 }
 PMAPS RangeMemorySearch_BYTE(BYTE from_value, BYTE to_value, PMAPS pMap)
 {
 	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
+	if (pid == 0) { puts("获取进程失败!"); return NULL; }
+	PMAPS pHead = NULL, pTail = NULL;
 	int iCount = 0;
-	int c;
-	BYTE buff[1024] = { 0 };
-	while (pTemp->next != NULL)
+	BYTE buff[4096] = { 0 };
+	for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
 	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
+		int c = (pTemp->taddr - pTemp->addr) / 4096;
+		for (int j = 0; j < c; j++)
 		{
-			pread64(handle, buff, 0x400, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
+			mem_read( buff, 0x1000, pTemp->addr + (j * 4096));
+			for (int i = 0; i < 4096; i++)
 			{
 				if (buff[i] >= from_value && buff[i] <= to_value)
 				{
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_BYTE;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
+					iCount++; gs++;
+					PMAPS pNew = (PMAPS) malloc(LEN); if (!pNew) goto done_rb;
+					pNew->addr = pTemp->addr + (j * 4096) + (i * sizeof(BYTE));
+					pNew->type = TYPE_BYTE; pNew->next = NULL;
+					if (!pHead) { pHead = pTail = pNew; } else { pTail->next = pNew; pTail = pNew; }
 				}
 			}
 		}
-		pTemp = pTemp->next;
 	}
-	free(n);
-	return pBuff;
+done_rb: return pHead;
 }
 PMAPS RangeMemorySearch_QWORD(QWORD from_value, QWORD to_value, PMAPS pMap)
 {
 	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
+	if (pid == 0) { puts("获取进程失败!"); return NULL; }
+	PMAPS pHead = NULL, pTail = NULL;
 	int iCount = 0;
-	int c;
-	QWORD buff[1024] = { 0 };
-	while (pTemp->next != NULL)
+	QWORD buff[512] = { 0 };
+	for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
 	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
+		int c = (pTemp->taddr - pTemp->addr) / 4096;
+		for (int j = 0; j < c; j++)
 		{
-			pread64(handle, buff, 0x1000, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
+			mem_read( buff, 0x1000, pTemp->addr + (j * 4096));
+			for (int i = 0; i < 512; i++)
 			{
 				if (buff[i] >= from_value && buff[i] <= to_value)
-				{				
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_QWORD;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
+				{
+					iCount++; gs++;
+					PMAPS pNew = (PMAPS) malloc(LEN); if (!pNew) goto done_rq;
+					pNew->addr = pTemp->addr + (j * 4096) + (i * sizeof(QWORD));
+					pNew->type = TYPE_QWORD; pNew->next = NULL;
+					if (!pHead) { pHead = pTail = pNew; } else { pTail->next = pNew; pTail = pNew; }
 				}
 			}
 		}
-		pTemp = pTemp->next;
 	}
-	free(n);
-	return pBuff;
+done_rq: return pHead;
 }
 void MemorySearch(char *value, TYPE type)
 {
@@ -1401,317 +1355,461 @@ if (strchr(value, '~')) {
 	ResCount = gs;
 	Res = pHead;
 }
+
+static inline PageInfo getPageInfo(int pagemap_fd, uintptr_t vaddr)
+{
+    PageInfo pi = {false, false, false, 0};
+    uint64_t entry;
+    off_t offset = (vaddr / PAGE_SIZE) * 8;
+    if (pread(pagemap_fd, &entry, 8, offset) != 8)
+        return pi;
+    pi.present    = (entry >> 63) & 1;
+    pi.swapped    = (entry >> 62) & 1;
+    pi.soft_dirty = (entry >> 55) & 1;
+    pi.pfn        = entry & ((1ULL << 55) - 1);
+    return pi;
+}
+
+static inline bool isPageResident(int pagemap_fd, uintptr_t addr)
+{
+    uint64_t entry;
+    off_t offset = (addr / PAGE_SIZE) * 8;
+    if (pread(pagemap_fd, &entry, 8, offset) != 8)
+        return false;
+    return (entry >> 63) & 1;
+}
+
+static void append_sub_region(PMAPS *pHead, PMAPS *pEnd, unsigned long start, unsigned long end)
+{
+    PMAPS pNew = (PMAPS)malloc(LEN);
+    if (pNew == NULL) return;
+    pNew->addr  = start;
+    pNew->taddr = end;
+    pNew->type  = 0;
+    pNew->next  = NULL;
+    if (*pHead == NULL) {
+        *pHead = pNew;
+        *pEnd  = pNew;
+    } else {
+        (*pEnd)->next = pNew;
+        *pEnd = pNew;
+    }
+}
+
+#ifndef READ_CHUNK_SIZE
+#define READ_CHUNK_SIZE 4096 
+#endif
+
+#ifndef CHUNK_DELAY_US
+#define CHUNK_DELAY_US 10    
+#endif
+
 PMAPS MemorySearch_DWORD(DWORD value, PMAPS pMap)
 {
-	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
-	int iCount = 0;
-	int c;
-	DWORD buff[1024] = { 0 };
-	while (pTemp != NULL)
-	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j++)
-		{
-			pread64(handle, buff, 0x1000, pTemp->addr + j * 4096);
-			for (int i = 0; i < 1024; i++)
-			{
-				if (buff[i] == value)
-				{
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_DWORD;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
-				}
-			}
-		}
-		pTemp = pTemp->next;
-	}
-	free(n);
-	return pBuff;
+    pid_t pid = getPID(bm);
+    if (pid == 0) {
+        puts("Не удалось получить PID процесса");
+        return NULL;
+    }
+
+    char pagemap_path[64];
+    snprintf(pagemap_path, sizeof(pagemap_path), "/proc/%d/pagemap", pid);
+    int pagemap_fd = open(pagemap_path, O_RDONLY);
+
+    PMAPS pHead = NULL, pTail = NULL;
+    int iCount = 0;
+
+    
+    DWORD page_buf[READ_CHUNK_SIZE / sizeof(DWORD)];
+
+    for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
+    {
+        uintptr_t region_start = pTemp->addr;
+        uintptr_t region_end   = pTemp->taddr;
+
+        for (uintptr_t page = region_start; page < region_end; page += READ_CHUNK_SIZE)
+        {
+            
+            if (pagemap_fd >= 0) {
+                PageInfo pi = getPageInfo(pagemap_fd, page);
+
+                
+                if (!pi.present && !pi.swapped)
+                    continue;
+            }
+
+            
+            uintptr_t chunk_end  = page + READ_CHUNK_SIZE;
+            if (chunk_end > region_end)
+                chunk_end = region_end;
+
+            size_t chunk_bytes = chunk_end - page;
+            size_t dword_count = chunk_bytes / sizeof(DWORD);
+            if (dword_count == 0) continue;
+
+            
+            ssize_t bytes_read = mem_read( page_buf, chunk_bytes, page);
+            if (bytes_read <= 0) continue;
+
+            size_t actual_dwords = (size_t)bytes_read / sizeof(DWORD);
+
+            
+            for (size_t i = 0; i < actual_dwords; i++)
+            {
+                if (page_buf[i] != value)
+                    continue;
+
+                PMAPS pNew = (PMAPS)malloc(LEN);
+                if (!pNew) goto done;
+
+                pNew->addr = page + i * sizeof(DWORD);
+                pNew->type = TYPE_DWORD;
+                pNew->next = NULL;
+
+                if (!pHead) {
+                    pHead = pTail = pNew;
+                } else {
+                    pTail->next = pNew;
+                    pTail = pNew;
+                }
+
+                iCount++;
+                gs += 1;
+            }
+            
+            
+        }
+    }
+
+done:
+    if (pagemap_fd >= 0) close(pagemap_fd);
+    return pHead;
 }
+
 PMAPS MemorySearch_FLOAT(FLOAT value, PMAPS pMap)
 {
-	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
-	int iCount = 0;
-	int c;
-	FLOAT buff[1024] = { 0 };
-	while (pTemp->next != NULL)
-	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
-		{
-			pread64(handle, buff, 0x1000, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
-			{
-				if (buff[i] == value)
-				{
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_FLOAT;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
-				}
-			}
-		}
-		pTemp = pTemp->next;
-	}
-	free(n);
-	return pBuff;
+    pid_t pid = getPID(bm);
+    if (pid == 0) {
+        puts("Не удалось получить PID процесса");
+        return NULL;
+    }
+
+    char pagemap_path[64];
+    snprintf(pagemap_path, sizeof(pagemap_path), "/proc/%d/pagemap", pid);
+    int pagemap_fd = open(pagemap_path, O_RDONLY);
+
+    PMAPS pHead = NULL, pTail = NULL;
+    int iCount = 0;
+
+    FLOAT page_buf[READ_CHUNK_SIZE / sizeof(FLOAT)];
+
+    for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
+    {
+        uintptr_t region_start = pTemp->addr;
+        uintptr_t region_end   = pTemp->taddr;
+
+        for (uintptr_t page = region_start; page < region_end; page += READ_CHUNK_SIZE)
+        {
+            if (pagemap_fd >= 0) {
+                PageInfo pi = getPageInfo(pagemap_fd, page);
+                if (!pi.present && !pi.swapped) continue;
+            }
+
+            uintptr_t chunk_end = page + READ_CHUNK_SIZE;
+            if (chunk_end > region_end) chunk_end = region_end;
+
+            size_t chunk_bytes = chunk_end - page;
+            size_t elem_count  = chunk_bytes / sizeof(FLOAT);
+            if (elem_count == 0) continue;
+
+            ssize_t bytes_read = mem_read(page_buf, chunk_bytes, page);
+            if (bytes_read <= 0) continue;
+
+            size_t actual = (size_t)bytes_read / sizeof(FLOAT);
+
+            for (size_t i = 0; i < actual; i++)
+            {
+                if (page_buf[i] != value) continue;
+
+                PMAPS pNew = (PMAPS)malloc(LEN);
+                if (!pNew) goto done_float;
+
+                pNew->addr = page + i * sizeof(FLOAT);
+                pNew->type = TYPE_FLOAT;
+                pNew->next = NULL;
+
+                if (!pHead) { pHead = pTail = pNew; }
+                else { pTail->next = pNew; pTail = pNew; }
+
+                iCount++;
+                gs++;
+            }
+        }
+    }
+
+done_float:
+    if (pagemap_fd >= 0) close(pagemap_fd);
+    return pHead;
 }
 PMAPS MemorySearch_DOUBLE(DOUBLE value, PMAPS pMap)
 {
-	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
-	int iCount = 0;
-	int c;
-	DOUBLE buff[1024] = { 0 };
-	while (pTemp->next != NULL)
-	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
-		{
-			pread64(handle, buff, 0x1000, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
-			{
-				if (buff[i] == value)
-				{
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_DOUBLE;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
-				}
-			}
-		}
-		pTemp = pTemp->next;
-	}
-	free(n);
-	return pBuff;
+    pid_t pid = getPID(bm);
+    if (pid == 0) {
+        puts("Не удалось получить PID процесса");
+        return NULL;
+    }
+
+    char pagemap_path[64];
+    snprintf(pagemap_path, sizeof(pagemap_path), "/proc/%d/pagemap", pid);
+    int pagemap_fd = open(pagemap_path, O_RDONLY);
+
+    PMAPS pHead = NULL, pTail = NULL;
+    int iCount = 0;
+
+    DOUBLE page_buf[READ_CHUNK_SIZE / sizeof(DOUBLE)];
+
+    for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
+    {
+        uintptr_t region_start = pTemp->addr;
+        uintptr_t region_end   = pTemp->taddr;
+
+        for (uintptr_t page = region_start; page < region_end; page += READ_CHUNK_SIZE)
+        {
+            if (pagemap_fd >= 0) {
+                PageInfo pi = getPageInfo(pagemap_fd, page);
+                if (!pi.present && !pi.swapped) continue;
+            }
+
+            uintptr_t chunk_end = page + READ_CHUNK_SIZE;
+            if (chunk_end > region_end) chunk_end = region_end;
+
+            size_t chunk_bytes = chunk_end - page;
+            size_t elem_count  = chunk_bytes / sizeof(DOUBLE);
+            if (elem_count == 0) continue;
+
+            ssize_t bytes_read = mem_read(page_buf, chunk_bytes, page);
+            if (bytes_read <= 0) continue;
+
+            size_t actual = (size_t)bytes_read / sizeof(DOUBLE);
+
+            for (size_t i = 0; i < actual; i++)
+            {
+                if (page_buf[i] != value) continue;
+
+                PMAPS pNew = (PMAPS)malloc(LEN);
+                if (!pNew) goto done_double;
+
+                pNew->addr = page + i * sizeof(DOUBLE);
+                pNew->type = TYPE_DOUBLE;
+                pNew->next = NULL;
+
+                if (!pHead) { pHead = pTail = pNew; }
+                else { pTail->next = pNew; pTail = pNew; }
+
+                iCount++;
+                gs++;
+            }
+        }
+    }
+
+done_double:
+    if (pagemap_fd >= 0) close(pagemap_fd);
+    return pHead;
 }
 PMAPS MemorySearch_WORD(WORD value, PMAPS pMap)
 {
-	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
-	int iCount = 0;
-	int c;
-	WORD buff[1024] = { 0 };
-	while (pTemp->next != NULL)
-	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
-		{
-			pread64(handle, buff, 0x800, pTemp->addr + (j * 4096));
-			n->type = TYPE_WORD;
-			for (int i = 0; i < 1024; i += 1)
-			{
-				if (buff[i] == value)
-				{
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
-				}
-			}
-		}
-		pTemp = pTemp->next;
-	}
-	free(n);
-	return pBuff;
+    pid_t pid = getPID(bm);
+    if (pid == 0) {
+        puts("Не удалось получить PID процесса");
+        return NULL;
+    }
+
+    char pagemap_path[64];
+    snprintf(pagemap_path, sizeof(pagemap_path), "/proc/%d/pagemap", pid);
+    int pagemap_fd = open(pagemap_path, O_RDONLY);
+
+    PMAPS pHead = NULL, pTail = NULL;
+    int iCount = 0;
+
+    WORD page_buf[READ_CHUNK_SIZE / sizeof(WORD)];
+
+    for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
+    {
+        uintptr_t region_start = pTemp->addr;
+        uintptr_t region_end   = pTemp->taddr;
+
+        for (uintptr_t page = region_start; page < region_end; page += READ_CHUNK_SIZE)
+        {
+            if (pagemap_fd >= 0) {
+                PageInfo pi = getPageInfo(pagemap_fd, page);
+                if (!pi.present && !pi.swapped) continue;
+            }
+
+            uintptr_t chunk_end = page + READ_CHUNK_SIZE;
+            if (chunk_end > region_end) chunk_end = region_end;
+
+            size_t chunk_bytes = chunk_end - page;
+            size_t elem_count  = chunk_bytes / sizeof(WORD);
+            if (elem_count == 0) continue;
+
+            ssize_t bytes_read = mem_read(page_buf, chunk_bytes, page);
+            if (bytes_read <= 0) continue;
+
+            size_t actual = (size_t)bytes_read / sizeof(WORD);
+
+            for (size_t i = 0; i < actual; i++)
+            {
+                if (page_buf[i] != value) continue;
+
+                PMAPS pNew = (PMAPS)malloc(LEN);
+                if (!pNew) goto done_word;
+
+                pNew->addr = page + i * sizeof(WORD);
+                pNew->type = TYPE_WORD;
+                pNew->next = NULL;
+
+                if (!pHead) { pHead = pTail = pNew; }
+                else { pTail->next = pNew; pTail = pNew; }
+
+                iCount++;
+                gs++;
+            }
+        }
+    }
+
+done_word:
+    if (pagemap_fd >= 0) close(pagemap_fd);
+    return pHead;
 }
 PMAPS MemorySearch_BYTE(BYTE value, PMAPS pMap)
 {
-	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
-	int iCount = 0;
-	int c;
-	BYTE buff[1024] = { 0 };
-	while (pTemp->next != NULL)
-	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
-		{
-			pread64(handle, buff, 0x400, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
-			{
-				if (buff[i] == value)
-				{
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_BYTE;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
-				}
-			}
-		}
-		pTemp = pTemp->next;
-	}
-	free(n);
-	return pBuff;
+    pid_t pid = getPID(bm);
+    if (pid == 0) {
+        puts("Не удалось получить PID процесса");
+        return NULL;
+    }
+
+    char pagemap_path[64];
+    snprintf(pagemap_path, sizeof(pagemap_path), "/proc/%d/pagemap", pid);
+    int pagemap_fd = open(pagemap_path, O_RDONLY);
+
+    PMAPS pHead = NULL, pTail = NULL;
+    int iCount = 0;
+
+    BYTE page_buf[READ_CHUNK_SIZE / sizeof(BYTE)];
+
+    for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
+    {
+        uintptr_t region_start = pTemp->addr;
+        uintptr_t region_end   = pTemp->taddr;
+
+        for (uintptr_t page = region_start; page < region_end; page += READ_CHUNK_SIZE)
+        {
+            if (pagemap_fd >= 0) {
+                PageInfo pi = getPageInfo(pagemap_fd, page);
+                if (!pi.present && !pi.swapped) continue;
+            }
+
+            uintptr_t chunk_end = page + READ_CHUNK_SIZE;
+            if (chunk_end > region_end) chunk_end = region_end;
+
+            size_t chunk_bytes = chunk_end - page;
+            size_t elem_count  = chunk_bytes / sizeof(BYTE);
+            if (elem_count == 0) continue;
+
+            ssize_t bytes_read = mem_read(page_buf, chunk_bytes, page);
+            if (bytes_read <= 0) continue;
+
+            size_t actual = (size_t)bytes_read / sizeof(BYTE);
+
+            for (size_t i = 0; i < actual; i++)
+            {
+                if (page_buf[i] != value) continue;
+
+                PMAPS pNew = (PMAPS)malloc(LEN);
+                if (!pNew) goto done_byte;
+
+                pNew->addr = page + i * sizeof(BYTE);
+                pNew->type = TYPE_BYTE;
+                pNew->next = NULL;
+
+                if (!pHead) { pHead = pTail = pNew; }
+                else { pTail->next = pNew; pTail = pNew; }
+
+                iCount++;
+                gs++;
+            }
+        }
+    }
+
+done_byte:
+    if (pagemap_fd >= 0) close(pagemap_fd);
+    return pHead;
 }
 PMAPS MemorySearch_QWORD(QWORD value, PMAPS pMap)
 {
-	pid_t pid = getPID(bm);
-	if (pid == 0)
-	{
-		puts("获取进程失败!");
-		return NULL;
-	}
-	PMAPS pTemp = NULL;
-	pTemp = pMap;
-	PMAPS n, e;
-	e = n = (PMAPS) malloc(LEN);
-	PMAPS pBuff;
-	pBuff = n;
-	int iCount = 0;
-	int c;
-	QWORD buff[1024] = { 0 };
-	while (pTemp->next != NULL)
-	{
-		c = (pTemp->taddr - pTemp->addr) / 4096;
-		for (int j = 0; j < c; j += 1)
-		{
-			pread64(handle, buff, 0x1000, pTemp->addr + (j * 4096));
-			for (int i = 0; i < 1024; i += 1)
-			{
-				if (buff[i] == value)
-				{
-					iCount++;
-					gs += 1;
-					n->addr = (pTemp->addr) + (j * 4096) + (i * 4);
-					n->type = TYPE_QWORD;
-					if (iCount == 1)
-					{
-						n->next = NULL;
-						e = n;
-						pBuff = n;
-					}
-					else
-					{
-						n->next = NULL;
-						e->next = n;
-						e = n;
-					}
-					n = (PMAPS) malloc(LEN);
-				}
-			}
-		}
-		pTemp = pTemp->next;
-	}
-	free(n);
-	return pBuff;
+    pid_t pid = getPID(bm);
+    if (pid == 0) {
+        puts("Не удалось получить PID процесса");
+        return NULL;
+    }
+
+    char pagemap_path[64];
+    snprintf(pagemap_path, sizeof(pagemap_path), "/proc/%d/pagemap", pid);
+    int pagemap_fd = open(pagemap_path, O_RDONLY);
+
+    PMAPS pHead = NULL, pTail = NULL;
+    int iCount = 0;
+
+    QWORD page_buf[READ_CHUNK_SIZE / sizeof(QWORD)];
+
+    for (PMAPS pTemp = pMap; pTemp != NULL; pTemp = pTemp->next)
+    {
+        uintptr_t region_start = pTemp->addr;
+        uintptr_t region_end   = pTemp->taddr;
+
+        for (uintptr_t page = region_start; page < region_end; page += READ_CHUNK_SIZE)
+        {
+            if (pagemap_fd >= 0) {
+                PageInfo pi = getPageInfo(pagemap_fd, page);
+                if (!pi.present && !pi.swapped) continue;
+            }
+
+            uintptr_t chunk_end = page + READ_CHUNK_SIZE;
+            if (chunk_end > region_end) chunk_end = region_end;
+
+            size_t chunk_bytes = chunk_end - page;
+            size_t elem_count  = chunk_bytes / sizeof(QWORD);
+            if (elem_count == 0) continue;
+
+            ssize_t bytes_read = mem_read(page_buf, chunk_bytes, page);
+            if (bytes_read <= 0) continue;
+
+            size_t actual = (size_t)bytes_read / sizeof(QWORD);
+
+            for (size_t i = 0; i < actual; i++)
+            {
+                if (page_buf[i] != value) continue;
+
+                PMAPS pNew = (PMAPS)malloc(LEN);
+                if (!pNew) goto done_qword;
+
+                pNew->addr = page + i * sizeof(QWORD);
+                pNew->type = TYPE_QWORD;
+                pNew->next = NULL;
+
+                if (!pHead) { pHead = pTail = pNew; }
+                else { pTail->next = pNew; pTail = pNew; }
+
+                iCount++;
+                gs++;
+            }
+        }
+    }
+
+done_qword:
+    if (pagemap_fd >= 0) close(pagemap_fd);
+    return pHead;
 }
 void MemoryOffset(char *value, OFFSET offset, TYPE type)
 {
@@ -1814,7 +1912,7 @@ PMAPS MemoryOffset_DWORD(DWORD value, OFFSET offset, PMAPS pBuff)
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg == value)
 		{
@@ -1838,7 +1936,6 @@ PMAPS MemoryOffset_DWORD(DWORD value, OFFSET offset, PMAPS pBuff)
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -1859,7 +1956,7 @@ PMAPS MemoryOffsetRange_DWORD(DWORD value, long int offset_start, long int offse
         bool found = false;
         for (long int off = offset_start; off <= offset_end; off++)
         {
-            pread64(handle, &buf, sizeof(DWORD), pTemp->addr + off);
+            mem_read( &buf, sizeof(DWORD), pTemp->addr + off);
             if (buf == value)
             {
                 found = true;
@@ -1907,7 +2004,7 @@ PMAPS MemoryOffset_FLOAT(FLOAT value, OFFSET offset, PMAPS pBuff)
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg == value)
 		{
@@ -1931,7 +2028,6 @@ PMAPS MemoryOffset_FLOAT(FLOAT value, OFFSET offset, PMAPS pBuff)
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -1952,7 +2048,7 @@ PMAPS MemoryOffsetRange_FLOAT(FLOAT value, long int offset_start, long int offse
         bool found = false;
         for (long int off = offset_start; off <= offset_end; off++)
         {
-            pread64(handle, &buf, sizeof(FLOAT), pTemp->addr + off);
+            mem_read( &buf, sizeof(FLOAT), pTemp->addr + off);
             if (buf == value)
             {
                 found = true;
@@ -2000,7 +2096,7 @@ PMAPS MemoryOffset_DOUBLE(DOUBLE value, OFFSET offset, PMAPS pBuff)
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg == value)
 		{
@@ -2024,7 +2120,6 @@ PMAPS MemoryOffset_DOUBLE(DOUBLE value, OFFSET offset, PMAPS pBuff)
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2045,7 +2140,7 @@ PMAPS MemoryOffsetRange_DOUBLE(DOUBLE value, long int offset_start, long int off
         bool found = false;
         for (long int off = offset_start; off <= offset_end; off++)
         {
-            pread64(handle, &buf, sizeof(DOUBLE), pTemp->addr + off);
+            mem_read( &buf, sizeof(DOUBLE), pTemp->addr + off);
             if (buf == value)
             {
                 found = true;
@@ -2089,7 +2184,7 @@ PMAPS MemoryOffset_WORD(WORD value, OFFSET offset, PMAPS pBuff)
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg == value)
 		{
@@ -2113,7 +2208,6 @@ PMAPS MemoryOffset_WORD(WORD value, OFFSET offset, PMAPS pBuff)
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2134,7 +2228,7 @@ PMAPS MemoryOffsetRange_WORD(WORD value, long int offset_start, long int offset_
         bool found = false;
         for (long int off = offset_start; off <= offset_end; off++)
         {
-            pread64(handle, &buf, sizeof(WORD), pTemp->addr + off);
+            mem_read( &buf, sizeof(WORD), pTemp->addr + off);
             if (buf == value)
             {
                 found = true;
@@ -2178,7 +2272,7 @@ PMAPS MemoryOffset_BYTE(BYTE value, OFFSET offset, PMAPS pBuff)
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;	
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg == value)
 		{
@@ -2202,7 +2296,6 @@ PMAPS MemoryOffset_BYTE(BYTE value, OFFSET offset, PMAPS pBuff)
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2223,7 +2316,7 @@ PMAPS MemoryOffsetRange_BYTE(BYTE value, long int offset_start, long int offset_
         bool found = false;
         for (long int off = offset_start; off <= offset_end; off++)
         {
-            pread64(handle, &buf, sizeof(BYTE), pTemp->addr + off);
+            mem_read( &buf, sizeof(BYTE), pTemp->addr + off);
             if (buf == value)
             {
                 found = true;
@@ -2267,7 +2360,7 @@ PMAPS MemoryOffset_QWORD(QWORD value, OFFSET offset, PMAPS pBuff)
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;	
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg == value)
 		{
@@ -2291,7 +2384,6 @@ PMAPS MemoryOffset_QWORD(QWORD value, OFFSET offset, PMAPS pBuff)
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2312,7 +2404,7 @@ PMAPS MemoryOffsetRange_QWORD(QWORD value, long int offset_start, long int offse
         bool found = false;
         for (long int off = offset_start; off <= offset_end; off++)
         {
-            pread64(handle, &buf, sizeof(QWORD), pTemp->addr + off);
+            mem_read( &buf, sizeof(QWORD), pTemp->addr + off);
             if (buf == value)
             {
                 found = true;
@@ -2411,7 +2503,7 @@ PMAPS RangeMemoryOffset_DWORD(DWORD from_value, DWORD to_value, OFFSET offset, P
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg >= from_value && jg <= to_value)
 		{
@@ -2435,7 +2527,6 @@ PMAPS RangeMemoryOffset_DWORD(DWORD from_value, DWORD to_value, OFFSET offset, P
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2459,7 +2550,7 @@ PMAPS RangeMemoryOffset_FLOAT(FLOAT from_value, FLOAT to_value, OFFSET offset, P
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;	
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg >= from_value && jg <= to_value)
 		{
@@ -2483,7 +2574,6 @@ PMAPS RangeMemoryOffset_FLOAT(FLOAT from_value, FLOAT to_value, OFFSET offset, P
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2507,7 +2597,7 @@ PMAPS RangeMemoryOffset_DOUBLE(DOUBLE from_value, DOUBLE to_value, OFFSET offset
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;	
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg >= from_value && jg <= to_value)
 		{
@@ -2531,7 +2621,6 @@ PMAPS RangeMemoryOffset_DOUBLE(DOUBLE from_value, DOUBLE to_value, OFFSET offset
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2555,7 +2644,7 @@ PMAPS RangeMemoryOffset_WORD(WORD from_value, WORD to_value, OFFSET offset, PMAP
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;	
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg >= from_value && jg <= to_value)
 		{
@@ -2579,7 +2668,6 @@ PMAPS RangeMemoryOffset_WORD(WORD from_value, WORD to_value, OFFSET offset, PMAP
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2603,7 +2691,7 @@ PMAPS RangeMemoryOffset_BYTE(BYTE from_value, BYTE to_value, OFFSET offset, PMAP
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;	
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg >= from_value && jg <= to_value)
 		{
@@ -2627,7 +2715,6 @@ PMAPS RangeMemoryOffset_BYTE(BYTE from_value, BYTE to_value, OFFSET offset, PMAP
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2651,7 +2738,7 @@ PMAPS RangeMemoryOffset_QWORD(QWORD from_value, QWORD to_value, OFFSET offset, P
 	while (pTemp != NULL)
 	{
 		all = pTemp->addr + offset;	
-		pread64(handle, buf, 4, all);
+		mem_read( buf, 4, all);
 		jg = *buf;
 		if (jg >= from_value && jg <= to_value)
 		{
@@ -2675,7 +2762,6 @@ PMAPS RangeMemoryOffset_QWORD(QWORD from_value, QWORD to_value, OFFSET offset, P
 			if (ResCount == 1)
 			{
 				free(pNew);
-				close(handle);
 				return BUFF;
 			}
 		}
@@ -2727,49 +2813,49 @@ void MemoryWriteRelative(const char *expr, OFFSET offset, TYPE type)
 		case TYPE_DWORD:
 		{
 			DWORD cur = 0;
-			pread64(handle, &cur, sizeof(DWORD), addr);
+			mem_read( &cur, sizeof(DWORD), addr);
 			cur += (DWORD)atoi(expr);
-			pwrite64(handle, &cur, sizeof(DWORD), addr);
+			mem_write( &cur, sizeof(DWORD), addr);
 			break;
 		}
 		case TYPE_FLOAT:
 		{
 			FLOAT cur = 0;
-			pread64(handle, &cur, sizeof(FLOAT), addr);
+			mem_read( &cur, sizeof(FLOAT), addr);
 			cur += (FLOAT)atof(expr);
-			pwrite64(handle, &cur, sizeof(FLOAT), addr);
+			mem_write( &cur, sizeof(FLOAT), addr);
 			break;
 		}
 		case TYPE_DOUBLE:
 		{
 			DOUBLE cur = 0;
-			pread64(handle, &cur, sizeof(DOUBLE), addr);
+			mem_read( &cur, sizeof(DOUBLE), addr);
 			cur += (DOUBLE)atof(expr);
-			pwrite64(handle, &cur, sizeof(DOUBLE), addr);
+			mem_write( &cur, sizeof(DOUBLE), addr);
 			break;
 		}
 		case TYPE_WORD:
 		{
 			WORD cur = 0;
-			pread64(handle, &cur, sizeof(WORD), addr);
+			mem_read( &cur, sizeof(WORD), addr);
 			cur += (WORD)atoi(expr);
-			pwrite64(handle, &cur, sizeof(WORD), addr);
+			mem_write( &cur, sizeof(WORD), addr);
 			break;
 		}
 		case TYPE_BYTE:
 		{
 			BYTE cur = 0;
-			pread64(handle, &cur, sizeof(BYTE), addr);
+			mem_read( &cur, sizeof(BYTE), addr);
 			cur += (BYTE)atoi(expr);
-			pwrite64(handle, &cur, sizeof(BYTE), addr);
+			mem_write( &cur, sizeof(BYTE), addr);
 			break;
 		}
 		case TYPE_QWORD:
 		{
 			QWORD cur = 0;
-			pread64(handle, &cur, sizeof(QWORD), addr);
+			mem_read( &cur, sizeof(QWORD), addr);
 			cur += (QWORD)atoll(expr);
-			pwrite64(handle, &cur, sizeof(QWORD), addr);
+			mem_write( &cur, sizeof(QWORD), addr);
 			break;
 		}
 		default:
@@ -2787,7 +2873,7 @@ int MemoryWrite_DWORD(DWORD value, PMAPS pBuff, OFFSET offset)
 	int i;
 	for (i = 0; i < ResCount; i++)
 	{
-		pwrite64(handle, &value, 4, pTemp->addr + offset);
+		mem_write( &value, 4, pTemp->addr + offset);
 		if (pTemp->next != NULL)
 			pTemp = pTemp->next;
 	}
@@ -2800,7 +2886,7 @@ int MemoryWrite_FLOAT(FLOAT value, PMAPS pBuff, OFFSET offset)
 	int i;
 	for (i = 0; i < ResCount; i++)
 	{
-		pwrite64(handle, &value, 4, pTemp->addr + offset);
+		mem_write( &value, 4, pTemp->addr + offset);
 		if (pTemp->next != NULL)
 			pTemp = pTemp->next;
 	}
@@ -2809,12 +2895,11 @@ int MemoryWrite_FLOAT(FLOAT value, PMAPS pBuff, OFFSET offset)
 int MemoryWrite_DOUBLE(DOUBLE value, PMAPS pBuff, OFFSET offset)
 {
 	PMAPS pTemp = NULL;
-	int handle;
 	pTemp = pBuff;
 	int i;
 	for (i = 0; i < ResCount; i++)
 	{
-		pwrite64(handle, &value, 4, pTemp->addr + offset);
+		mem_write( &value, 4, pTemp->addr + offset);
 		if (pTemp->next != NULL)
 			pTemp = pTemp->next;
 	}
@@ -2827,7 +2912,7 @@ int MemoryWrite_WORD(WORD value, PMAPS pBuff, OFFSET offset)
 	int i;
 	for (i = 0; i < ResCount; i++)
 	{
-		pwrite64(handle, &value, 2, pTemp->addr + offset);
+		mem_write( &value, 2, pTemp->addr + offset);
 		if (pTemp->next != NULL)
 			pTemp = pTemp->next;
 	}
@@ -2840,7 +2925,7 @@ int MemoryWrite_BYTE(BYTE value, PMAPS pBuff, OFFSET offset)
 	int i;
 	for (i = 0; i < ResCount; i++)
 	{
-		pwrite64(handle, &value, 1, pTemp->addr + offset);
+		mem_write( &value, 1, pTemp->addr + offset);
 		if (pTemp->next != NULL)
 			pTemp = pTemp->next;
 	}
@@ -2853,7 +2938,7 @@ int MemoryWrite_QWORD(QWORD value, PMAPS pBuff, OFFSET offset)
 	int i;
 	for (i = 0; i < ResCount; i++)
 	{
-		pwrite64(handle, &value, 4, pTemp->addr + offset);
+		mem_write( &value, 4, pTemp->addr + offset);
 		if (pTemp->next != NULL)
 			pTemp = pTemp->next;
 	}
@@ -2889,32 +2974,32 @@ int WriteAddress(ADDRESS addr, char *value, TYPE type)
 }
 int WriteAddress_DWORD(ADDRESS addr, DWORD value)
 {
-	pwrite64(handle, &value, 4, addr);
+	mem_write( &value, 4, addr);
 	return 0;
 }
 int WriteAddress_FLOAT(ADDRESS addr, FLOAT value)
 {
-	pwrite64(handle, &value, 4, addr);
+	mem_write( &value, 4, addr);
 	return 0;
 }
 int WriteAddress_DOUBLE(ADDRESS addr, DOUBLE value)
 {
-	pwrite64(handle, &value, 4, addr);
+	mem_write( &value, 4, addr);
 	return 0;
 }
 int WriteAddress_WORD(ADDRESS addr, WORD value)
 {
-	pwrite64(handle, &value, 2, addr);
+	mem_write( &value, 2, addr);
 	return 0;
 }
 int WriteAddress_BYTE(ADDRESS addr, BYTE value)
 {
-	pwrite64(handle, &value, 1, addr);
+	mem_write( &value, 1, addr);
 	return 0;
 }
 int WriteAddress_QWORD(ADDRESS addr, QWORD value)
 {
-	pwrite64(handle, &value, 4, addr);
+	mem_write( &value, 4, addr);
 	return 0;
 }
 int isapkinstalled(PACKAGENAME * bm)
@@ -3011,13 +3096,12 @@ char GetProcessState(PACKAGENAME * bm)
 	{
 		return 0;				
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);	
 		if (strstr(buff, "State"))
 		{
-			sscanf(buff, "State: %c", &zt);	
-			break;				
+			sscanf(buff, "State: %c", &zt);
+			break;
 		}
 	}
 	fclose(fp);
@@ -3125,35 +3209,7 @@ int killXs()
 	closedir(dir);				
 	return 0;
 }
-int killLOL()
-{
-	DIR *dir = NULL;
-	struct dirent *ptr = NULL;
-	char filepath[256];
-	char filetext[128];			
-	dir = opendir("/data/data");	
-	FILE *fp = NULL;
-	if (NULL != dir)
-	{
-		while ((ptr = readdir(dir)) != NULL)
-		{
-			if ((strcmp(ptr->d_name, ".") == 0) || (strcmp(ptr->d_name, "..") == 0))
-				continue;
-			if (ptr->d_type != DT_DIR)
-				continue;
-			sprintf(filepath, "/data/data/com.riotgames.league.wildrifts/app_libs/libFEProj.so", ptr->d_name);	
-			fp = fopen(filepath, "r");
-			if (fp == NULL)
-				continue;
-			else
-			{
-				killprocess(ptr->d_name);
-			}
-		}
-	}
-	closedir(dir);				
-	return 0;
-}
+
 void FreezeThread()
 {
 	int pid;
@@ -3169,7 +3225,7 @@ void FreezeThread()
 	WORD buf_w;
 	BYTE buf_b;
 	QWORD buf_q;
-	if (handle == -1)
+	if (vm_pid == 0)
 	{
 		puts("Error -2");
 		return;
@@ -3194,27 +3250,27 @@ void FreezeThread()
 			{
 			case TYPE_DWORD:
 				buf_i = atoi(pTemp->value);
-				pwrite64(handle, &buf_i, 4, pTemp->addr);
+				mem_write( &buf_i, 4, pTemp->addr);
 				break;
 			case TYPE_FLOAT:
 				buf_f = atof(pTemp->value);
-				pwrite64(handle, &buf_f, 4, pTemp->addr);
+				mem_write( &buf_f, 4, pTemp->addr);
 				break;
 			case TYPE_DOUBLE:
 				buf_d = atof(pTemp->value);
-				pwrite64(handle, &buf_d, 4, pTemp->addr);
+				mem_write( &buf_d, 4, pTemp->addr);
 				break;
 			case TYPE_WORD:
 				buf_w = atoi(pTemp->value);
-				pwrite64(handle, &buf_w, 2, pTemp->addr);
+				mem_write( &buf_w, 2, pTemp->addr);
 				break;
 			case TYPE_BYTE:
 				buf_b = atoi(pTemp->value);
-				pwrite64(handle, &buf_b, 1, pTemp->addr);
+				mem_write( &buf_b, 1, pTemp->addr);
 				break;
 			case TYPE_QWORD:
 				buf_q = atoi(pTemp->value);
-				pwrite64(handle, &buf_q, 4, pTemp->addr);
+				mem_write( &buf_q, 4, pTemp->addr);
 				break;
 			default:
 				break;
@@ -3224,17 +3280,6 @@ void FreezeThread()
 		usleep(delay);	
 	}
 	return;
-}
-PMAPS GetResults()
-{
-	if (Res == NULL)
-	{
-		return NULL;
-	}
-	else
-	{
-		return Res;				
-	}
 }
 int AddFreezeItem_All(char *Value, TYPE type, OFFSET offset)
 {
@@ -3294,7 +3339,7 @@ int AddFreezeItem_All_Relative(const char *expr, TYPE type, OFFSET offset)
 		case TYPE_DWORD:
 		{
 			DWORD cur = 0;
-			pread64(handle, &cur, sizeof(DWORD), addr);
+			mem_read( &cur, sizeof(DWORD), addr);
 			cur += (DWORD)atoi(expr);
 			sprintf(buf, "%d", (int)cur);
 			AddFreezeItem(pTemp->addr, strdup(buf), TYPE_DWORD, offset);
@@ -3303,7 +3348,7 @@ int AddFreezeItem_All_Relative(const char *expr, TYPE type, OFFSET offset)
 		case TYPE_FLOAT:
 		{
 			FLOAT cur = 0;
-			pread64(handle, &cur, sizeof(FLOAT), addr);
+			mem_read( &cur, sizeof(FLOAT), addr);
 			cur += (FLOAT)atof(expr);
 			sprintf(buf, "%f", cur);
 			AddFreezeItem(pTemp->addr, strdup(buf), TYPE_FLOAT, offset);
@@ -3312,7 +3357,7 @@ int AddFreezeItem_All_Relative(const char *expr, TYPE type, OFFSET offset)
 		case TYPE_DOUBLE:
 		{
 			DOUBLE cur = 0;
-			pread64(handle, &cur, sizeof(DOUBLE), addr);
+			mem_read( &cur, sizeof(DOUBLE), addr);
 			cur += (DOUBLE)atof(expr);
 			sprintf(buf, "%lf", cur);
 			AddFreezeItem(pTemp->addr, strdup(buf), TYPE_DOUBLE, offset);
@@ -3321,7 +3366,7 @@ int AddFreezeItem_All_Relative(const char *expr, TYPE type, OFFSET offset)
 		case TYPE_WORD:
 		{
 			WORD cur = 0;
-			pread64(handle, &cur, sizeof(WORD), addr);
+			mem_read( &cur, sizeof(WORD), addr);
 			cur += (WORD)atoi(expr);
 			sprintf(buf, "%d", (int)cur);
 			AddFreezeItem(pTemp->addr, strdup(buf), TYPE_WORD, offset);
@@ -3330,7 +3375,7 @@ int AddFreezeItem_All_Relative(const char *expr, TYPE type, OFFSET offset)
 		case TYPE_BYTE:
 		{
 			BYTE cur = 0;
-			pread64(handle, &cur, sizeof(BYTE), addr);
+			mem_read( &cur, sizeof(BYTE), addr);
 			cur += (BYTE)atoi(expr);
 			sprintf(buf, "%d", (int)cur);
 			AddFreezeItem(pTemp->addr, strdup(buf), TYPE_BYTE, offset);
@@ -3339,7 +3384,7 @@ int AddFreezeItem_All_Relative(const char *expr, TYPE type, OFFSET offset)
 		case TYPE_QWORD:
 		{
 			QWORD cur = 0;
-			pread64(handle, &cur, sizeof(QWORD), addr);
+			mem_read( &cur, sizeof(QWORD), addr);
 			cur += (QWORD)atoll(expr);
 			sprintf(buf, "%ld", (long)cur);
 			AddFreezeItem(pTemp->addr, strdup(buf), TYPE_QWORD, offset);
@@ -3749,11 +3794,8 @@ PMAPS readmaps(TYPE type)
 PMAPS readmaps_all()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew;
-	PMAPS pEnd;
-	pEnd = pNew = (PMAPS) malloc(LEN);
+	PMAPS pEnd = NULL;
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -3763,48 +3805,24 @@ PMAPS readmaps_all()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);	
-		if (strstr(buff, "rw") != NULL && !feof(fp))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);	
-		}
+		if (strstr(buff, "rw") == NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);					
-	fclose(fp);					
+	fclose(fp);
 	return pHead;
 }
 PMAPS readmaps_bad()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -3814,48 +3832,25 @@ PMAPS readmaps_bad()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "kgsl-3d0"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		
+		if (strstr(buff, "---p") == NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
 PMAPS readmaps_v()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -3865,48 +3860,24 @@ PMAPS readmaps_v()
 		puts("分析失败");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "/dev/kgsl-3d0"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		if (strstr(buff, "rw") == NULL || strstr(buff, "/dev/kgsl-3d0") == NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
 PMAPS readmaps_c_alloc()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -3916,48 +3887,24 @@ PMAPS readmaps_c_alloc()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "[anon:libc_malloc]"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		if (strstr(buff, "rw") == NULL || strstr(buff, "[anon:libc_malloc]") == NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
 PMAPS readmaps_c_bss()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -3967,37 +3914,16 @@ PMAPS readmaps_c_bss()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "[anon:.bss]"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		if (strstr(buff, "rw") == NULL || strstr(buff, "[anon:.bss]") == NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
@@ -4055,11 +3981,9 @@ PMAPS readmaps_code_app()
 PMAPS readmaps_c_data()
 {
     PMAPS pHead = NULL;
-    PMAPS pNew = NULL;
     PMAPS pEnd = NULL;
     FILE *fp;
-    char lj[64], buff[512];
-    char perms[16];
+    char lj[64], buff[256];
     int pid = getPID(bm);
     if (pid == 0) return NULL;
     sprintf(lj, "/proc/%d/maps", pid);
@@ -4071,33 +3995,15 @@ PMAPS readmaps_c_data()
     }
     while (fgets(buff, sizeof(buff), fp) != NULL)
     {
-        if (strstr(buff, bm) != NULL)
-        {
-            long start_addr = 0;
-            long end_addr = 0;
-            long file_offset = 0;
-            if (sscanf(buff, "%lx-%lx %15s %lx", &start_addr, &end_addr, perms, &file_offset) == 4)
-            {
-                if (file_offset == 0)
-                {
-                    pNew = (PMAPS) malloc(LEN);
-                    if (pNew == NULL) break;
-                    pNew->addr = start_addr;
-                    pNew->taddr = end_addr;
-                    pNew->next = NULL;
-                    if (pHead == NULL)
-                    {
-                        pHead = pNew;
-                        pEnd = pNew;
-                    }
-                    else
-                    {
-                        pEnd->next = pNew;
-                        pEnd = pNew;
-                    }
-                }
-            }
-        }
+        
+        if (strstr(buff, "rw-p") == NULL) continue;
+        if (strstr(buff, "/data/") == NULL) continue;
+        PMAPS pNew = (PMAPS) malloc(LEN);
+        if (!pNew) break;
+        sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+        pNew->next = NULL;
+        if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+        else { pEnd->next = pNew; pEnd = pNew; }
     }
     fclose(fp);
     return pHead;
@@ -4105,11 +4011,8 @@ PMAPS readmaps_c_data()
 PMAPS readmaps_c_heap()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -4119,48 +4022,24 @@ PMAPS readmaps_c_heap()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "[heap]"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		if (strstr(buff, "rw") == NULL || strstr(buff, "[heap]") == NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
 PMAPS readmaps_java_heap()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -4170,94 +4049,94 @@ PMAPS readmaps_java_heap()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "/dev/ashmem/"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		if (strstr(buff, "rw") == NULL) continue;
+		
+		bool is_dalvik_ashmem = (strstr(buff, "/dev/ashmem/") != NULL &&
+		                         strstr(buff, "dalvik") != NULL);
+		bool is_dalvik_anon   = (strstr(buff, "[anon:dalvik") != NULL);
+		bool is_art_anon      = (strstr(buff, "[anon:art") != NULL);
+		if (!is_dalvik_ashmem && !is_dalvik_anon && !is_art_anon) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
-PMAPS readmaps_a_anonmyous()
+
+PMAPS readmaps_a_anonmyous(PageFilter filter)
 {
-    PMAPS pHead = NULL;
-    PMAPS pEnd = NULL;
-    FILE *fp;
-    char lj[64], buff[256];
+    PMAPS pHead = NULL, pEnd = NULL;
+    char path[64];
+    char buff[256];
     int pid = getPID(bm);
-    int count = 0;
-    sprintf(lj, "/proc/%d/maps", pid);
-    fp = fopen(lj, "r");
-    if (fp == NULL)
-    {
-        return NULL;
-    }
+
+    snprintf(path, sizeof(path), "/proc/%d/maps", pid);
+    FILE *fp = fopen(path, "r");
+    if (!fp) return NULL;
+
+    snprintf(path, sizeof(path), "/proc/%d/pagemap", pid);
+    int pagemap_fd = open(path, O_RDONLY);
+
     while (fgets(buff, sizeof(buff), fp))
-    {    
-        if (strstr(buff, "rw-p") != NULL && strchr(buff, '/') == NULL && strchr(buff, '[') == NULL)
-        {
-            unsigned long start, end;
-            sscanf(buff, "%lx-%lx", &start, &end);        
-            long size = end - start;
-              if (size < 150000) { 
-              continue;
-              }
-            unsigned long mid_addr = start + (end - start) / 1;
-            PMAPS pNew = (PMAPS)malloc(LEN);
-            if (pNew == NULL) break;
-            pNew->addr = start;
-            pNew->taddr = mid_addr; 
-            pNew->next = NULL;
-            if (pHead == NULL)
-            {
-                pHead = pNew;
-                pEnd = pNew;
-            }
-            else
-            {
-                pEnd->next = pNew;
-                pEnd = pNew;
-            }
-            count++;
+    {
+        if (!strstr(buff, "rw-p"))         continue;
+        if (strchr(buff, '/') != NULL)     continue;  
+        if (strchr(buff, '[') != NULL)     continue;  
+
+        uintptr_t start, end;
+        if (sscanf(buff, "%lx-%lx", &start, &end) != 2) continue;
+
+        if (pagemap_fd < 0) {
+            
+            append_sub_region(&pHead, &pEnd, start, end);
+            continue;
         }
+
+        uintptr_t sub_start = 0;
+        bool in_block = false;
+
+        for (uintptr_t page = start; page < end; page += PAGE_SIZE)
+        {
+            PageInfo pi = getPageInfo(pagemap_fd, page);
+
+            bool accept = false;
+            if ((filter & FILTER_PRESENT) && pi.present)   accept = true;
+            if ((filter & FILTER_SWAPPED) && pi.swapped)   accept = true;
+            if ((filter & FILTER_SOFT_DIRTY) && !pi.soft_dirty) accept = false; 
+
+            if (accept && !in_block) {
+                sub_start = page;
+                in_block  = true;
+            } else if (!accept && in_block) {
+                append_sub_region(&pHead, &pEnd, sub_start, page);
+                in_block = false;
+            }
+        }
+
+        if (in_block)
+            append_sub_region(&pHead, &pEnd, sub_start, end);
     }
+
+    if (pagemap_fd >= 0) close(pagemap_fd);
     fclose(fp);
     return pHead;
+}
+
+PMAPS readmaps_a_anonmyous()
+{
+    return readmaps_a_anonmyous(FILTER_PRESENT);
 }
 PMAPS readmaps_code_system()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -4267,48 +4146,24 @@ PMAPS readmaps_code_system()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "/system"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		if (strstr(buff, "rw") == NULL || strstr(buff, "/system") == NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
 PMAPS readmaps_stack()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -4318,48 +4173,24 @@ PMAPS readmaps_stack()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "[stack]"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		if (strstr(buff, "rw") == NULL || strstr(buff, "[stack]") == NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
 PMAPS readmaps_ashmem()
 {
 	PMAPS pHead = NULL;
-	PMAPS pNew = NULL;
 	PMAPS pEnd = NULL;
-	pEnd = pNew = (PMAPS) malloc(LEN);
 	FILE *fp;
-	int i = 0, flag = 1;
 	char lj[64], buff[256];
 	int pid = getPID(bm);
 	sprintf(lj, "/proc/%d/maps", pid);
@@ -4369,38 +4200,19 @@ PMAPS readmaps_ashmem()
 		puts("内存读取失败!");
 		return NULL;
 	}
-	while (!feof(fp))
+	while (fgets(buff, sizeof(buff), fp) != NULL)
 	{
-		fgets(buff, sizeof(buff), fp);
-		if (strstr(buff, "rw") != NULL && !feof(fp) && strstr(buff, "/dev/ashmem/")
-			&& !strstr(buff, "dalvik"))
-		{
-			sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
-			flag = 1;
-		}
-		else
-		{
-			flag = 0;
-		}
-		if (flag == 1)
-		{
-			i++;
-			if (i == 1)
-			{
-				pNew->next = NULL;
-				pEnd = pNew;
-				pHead = pNew;
-			}
-			else
-			{
-				pNew->next = NULL;
-				pEnd->next = pNew;
-				pEnd = pNew;
-			}
-			pNew = (PMAPS) malloc(LEN);
-		}
+		if (strstr(buff, "rw") == NULL) continue;
+		if (strstr(buff, "/dev/ashmem/") == NULL) continue;
+		if (strstr(buff, "dalvik") != NULL) continue;
+		PMAPS pNew = (PMAPS) malloc(LEN);
+		if (!pNew) break;
+		sscanf(buff, "%lx-%lx", &pNew->addr, &pNew->taddr);
+		pNew->next = NULL;
+		if (pHead == NULL) { pHead = pNew; pEnd = pNew; }
+		else { pEnd->next = pNew; pEnd = pNew; }
 	}
-	free(pNew);
 	fclose(fp);
 	return pHead;
 }
+
