@@ -22,7 +22,7 @@ function(ExampleOff) {
 
 function(ExampleFreeze) {
     char* pkg = const_cast<char*>(processGame.c_str());
-    initXMemoryTools(pkg, MODE_ROOT);
+    initXMemoryToolsOld(pkg, MODE_ROOT); // Old для работы с rx-p через /mem
     SetSearchRange(CODE_APP);
     MemorySearch("1", TYPE_DWORD);
     MemoryOffset("2", 4, TYPE_DWORD);
@@ -68,10 +68,10 @@ function(ExampleInaccurate) {
     char* pkg = const_cast<char*>(processGame.c_str());
     initXMemoryTools(pkg, MODE_ROOT);
     SetSearchRange(A_ANONMYOUS);
-    MemorySearch("100~120", TYPE_DWORD); // Ищем от 100 до 120
-    MemoryOffset("2~3", 4, TYPE_DWORD); // Рядом значения от 2 до 3
+    MemorySearch("100~120", TYPE_FLOAT); // Ищем от 100 до 120
+    MemoryOffset("2~3", 4, TYPE_FLOAT); // Рядом значения от 2 до 3
     
-    AddFreezeItem_All_Relative("-5", TYPE_DWORD, 0); // От каждого значения из поиска -5 и фриз
+    AddFreezeItem_All_Relative("-5", TYPE_FLOAT, 0); // От каждого значения из поиска -5 и фриз
     StartFreezeThread();
     ClearResults();
     return 0;
