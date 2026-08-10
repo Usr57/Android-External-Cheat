@@ -19,7 +19,6 @@
 #include "Scarecrow/Obfuscate.h"
 #include <atomic>
 
-inline const char* SOCKET_PATH = "/data/data/video.like/files/ipc_socket";
 inline std::string processGame = "";
 
 using CommandFunc = std::function<int()>; 
