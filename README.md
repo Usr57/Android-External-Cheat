@@ -1,4 +1,4 @@
-<img src="screenshot.png" width="300" alt="Скриншот">
+<img src="screenshot.png" width="750" alt="Скриншот">
 
 ## Описание
 Чит на мобильные игры.
