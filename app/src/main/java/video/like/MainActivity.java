@@ -28,11 +28,12 @@ import android.animation.ArgbEvaluator;
 import android.animation.ValueAnimator;
 import android.graphics.drawable.GradientDrawable;
 import android.widget.Button;
-import android.widget.Toast;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
 import java.net.InetSocketAddress;
 import java.net.Socket;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
 
 public class MainActivity extends Activity {
 
@@ -72,10 +73,7 @@ public class MainActivity extends Activity {
 
 		procDestroy();
 		url = getUrl();
-		packageGame = getPackageGame(); 
-		String file1 = "/data/data/" + packageGame + "/files/Shaders.txt";
-        String file2 = "/data/data/" + packageGame + "/files/log.txt";
-		deleteFiles(file1, file2);
+		packageGame = getPackageGame(); 	
         getOwnLibraryPath();
 		copyLibToTmp();
         checkPackage(packageGame);
@@ -414,61 +412,34 @@ public class MainActivity extends Activity {
 	}
 
     void checkRoot() {
-        TextView rootTextView = findViewById(R.id.RootCheckTv);
-        Process process = null;
-        DataOutputStream os = null;
-        try {
-            process = Runtime.getRuntime().exec("su");
-            os = new DataOutputStream(process.getOutputStream());
-            os.writeBytes("touch /data/testfile.txt\n");
-            os.writeBytes("exit\n");
-            os.flush();
+		TextView rootTextView = findViewById(R.id.RootCheckTv);
+		boolean isRooted = false;
+		Process process = null;
 
-            int exitValue = process.waitFor();
-            if (exitValue == 0) {
-                rootTextView.setText("Root: found");
-                rootTextView.setTextColor(Color.parseColor("#FFFFFFFF"));
-            } else {
-                rootTextView.setText("Root: not found (Cheat dont work without root!)");
-                rootTextView.setTextColor(Color.parseColor("#FF0000"));
-            }
-        } catch (Exception e) {
-            rootTextView.setText("Root: check error");
-            rootTextView.setTextColor(Color.parseColor("#FF0000"));
-        } finally {
-            try {
-                if (os != null) {
-                    os.close();
-                }
-                if (process != null) {
-                    process.destroy();
-                }
-            } catch (IOException e) {
-                e.printStackTrace();
-            }
-        }
-        File testFile = new File("/data/testfile.txt"); 
-        if (testFile.exists()) {
-            testFile.delete();
-        }
-    }
-
-	public boolean deleteFiles(String... filePaths) {
-        try {
-            Process process = Runtime.getRuntime().exec("su");
-            DataOutputStream os = new DataOutputStream(process.getOutputStream());
-            for (String filePath : filePaths) {
-                os.writeBytes("rm -f \"" + filePath + "\"\n");
-            }
-            os.writeBytes("exit\n");
-            os.flush();
-            process.waitFor();
-            os.close();
-            return true;
-        } catch (IOException | InterruptedException e) {
-            return false;
-        }
-    }
+		try {		
+			process = Runtime.getRuntime().exec(new String[]{"su", "-c", "id"});
+			BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()));
+			String output = reader.readLine();
+			int exitValue = process.waitFor();
+			if (exitValue == 0 && output != null && output.contains("uid=0")) {
+				isRooted = true;
+			}
+		} catch (Exception e) {
+			isRooted = false;
+		} finally {
+			if (process != null) {
+				process.destroy();
+			}
+		}
+		if (isRooted) {
+			rootTextView.setText("Root: found");
+			rootTextView.setTextColor(Color.parseColor("#FFFFFFFF"));
+		} else {
+			rootTextView.setText("Root: not found");
+			rootTextView.setTextColor(Color.parseColor("#FF0000"));
+		}
+	}
+	
 
 	@Override
     public void onBackPressed() {
