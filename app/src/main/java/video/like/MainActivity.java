@@ -41,7 +41,6 @@ public class MainActivity extends Activity {
     String url;
     String libPath;
     String ownLibPath;
-    String architecture;
     boolean wasPermissionDenied = false; 
 
 	@Override
@@ -50,7 +49,7 @@ public class MainActivity extends Activity {
 
         setContentView(R.layout.activity_main);
         System.loadLibrary("User");	
-
+		procDestroy();
 		try {
 			AssetManager assetManager = getAssets();
 			String[] assetsList = getAllExecuterFiles();
@@ -70,8 +69,6 @@ public class MainActivity extends Activity {
 		} catch (IOException e) {
 			e.printStackTrace();
 		}
-
-		procDestroy();
 		url = getUrl();
 		packageGame = getPackageGame(); 	
         getOwnLibraryPath();
@@ -80,8 +77,7 @@ public class MainActivity extends Activity {
         checkRoot();
         checkArchitecture();
         checkPermission();
-        checkFloating(this);
-		architecture = getArchitecture();      
+        checkFloating(this);	
         extractArm64LibForEmulator();
 		startSocketCheck();
     }
@@ -114,8 +110,6 @@ public class MainActivity extends Activity {
     }
 
     native void checkFloating(Context ctx);
-
-    native void nativePath(String libPath);
 
     native void nativeOwnPath(String ownLibPath);
 
@@ -177,26 +171,20 @@ public class MainActivity extends Activity {
         }
     }
 
-    private String getArchitecture() {
-        return Build.SUPPORTED_ABIS[0];
-    }
-
-    void checkArchitecture() {
-        TextView architectureTextView = findViewById(R.id.ArchitectureCheckTv);
-        String arch = getArchitecture();
-
-        String displayText;
-        int textColor;
-        if ("arm64-v8a".equals(arch) || "x86_64".equals(arch)) {
-            displayText = "Architecture: " + arch;
-            textColor = Color.WHITE; 
-        } else {
-            displayText = "Architecture: " + arch + " (unsupported!)";
-            textColor = Color.RED;
-        }
-        architectureTextView.setText(displayText);
-        architectureTextView.setTextColor(textColor);
-    }
+	private void checkArchitecture() {
+		TextView tv = (TextView) findViewById(R.id.ArchitectureCheckTv);
+		try {
+			ApplicationInfo ai = getPackageManager().getApplicationInfo(packageGame, 0);
+			String abi = new File(ai.nativeLibraryDir).getName();
+			boolean ok = abi.equals("arm64");
+			tv.setText(ok ? "Architecture: arm64"
+					   : "Architecture: " + abi + " (unsupported!) only arm64");
+			tv.setTextColor(ok ? Color.WHITE : Color.RED);
+		} catch (PackageManager.NameNotFoundException e) {
+			tv.setText("Error: " + packageGame + " is not installed");
+			tv.setTextColor(Color.RED);
+		}
+	}
 
     private void startSocketCheck() {
 		final TextView socketTextView = findViewById(R.id.SocketCheckTv);
@@ -332,40 +320,13 @@ public class MainActivity extends Activity {
 			}
 		}
 	}
-
-    private boolean copyMemoryLib(InputStream inputStream, String destinationPath) {
-        File tempFile = null;
-        try {
-            tempFile = File.createTempFile("libMemory_temp", ".so", getCacheDir());
-            try (OutputStream tempOut = new FileOutputStream(tempFile)) {
-                byte[] buffer = new byte[4096];
-                int bytesRead;
-                while ((bytesRead = inputStream.read(buffer)) != -1) {
-                    tempOut.write(buffer, 0, bytesRead);
-                }
-            }
-
-            Process process = Runtime.getRuntime().exec("su");
-            try (DataOutputStream os = new DataOutputStream(process.getOutputStream())) {
-                os.writeBytes("cp " + tempFile.getAbsolutePath() + " " + destinationPath + "\n");
-                os.writeBytes("chmod 755 " + destinationPath + "\n");
-                os.writeBytes("exit\n");
-                os.flush();
-            }
-
-            int exitValue = process.waitFor();
-            return exitValue == 0;
-        } catch (IOException | InterruptedException e) {
-            e.printStackTrace();
-            return false;
-        } finally {
-            if (tempFile != null && tempFile.exists()) {
-                tempFile.delete();
-            }
-        }
+	
+	private String getArchitecture() {
+        return Build.SUPPORTED_ABIS[0];
     }
+	
 
-    private void extractArm64LibForEmulator() {
+	private void extractArm64LibForEmulator() {
         if (!"x86_64".equals(getArchitecture())) {
             return;
         }
@@ -401,7 +362,40 @@ public class MainActivity extends Activity {
             }
         }
     }
+	
 
+	private boolean copyMemoryLib(InputStream inputStream, String destinationPath) {
+        File tempFile = null;
+        try {
+            tempFile = File.createTempFile("libmain_temp", ".so", getCacheDir());
+            try (OutputStream tempOut = new FileOutputStream(tempFile)) {
+                byte[] buffer = new byte[4096];
+                int bytesRead;
+                while ((bytesRead = inputStream.read(buffer)) != -1) {
+                    tempOut.write(buffer, 0, bytesRead);
+                }
+            }
+
+            Process process = Runtime.getRuntime().exec("su");
+            try (DataOutputStream os = new DataOutputStream(process.getOutputStream())) {
+                os.writeBytes("cp " + tempFile.getAbsolutePath() + " " + destinationPath + "\n");
+                os.writeBytes("chmod 755 " + destinationPath + "\n");
+                os.writeBytes("exit\n");
+                os.flush();
+            }
+
+            int exitValue = process.waitFor();
+            return exitValue == 0;
+        } catch (IOException | InterruptedException e) {
+            e.printStackTrace();
+            return false;
+        } finally {
+            if (tempFile != null && tempFile.exists()) {
+                tempFile.delete();
+            }
+        }
+    }
+	
     private String[] getAllExecuterFiles() {
 		return new String[]{
 			"executer", 
