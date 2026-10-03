@@ -18,7 +18,6 @@
 
 extern std::string packageName;
 extern std::string appUrl;
-std::string architecture;
 
 std::string ownLibPath;
 std::string filePath = "/data/data/video.like/files/";
@@ -29,23 +28,23 @@ void runCommandAsRoot(const std::string& cmd) {
 }
 
 void executeMemoryLib() {
+	std::string executerX64 = filePath + "executerX64";
     std::string executerArm = filePath + "executer";
-    std::string executerX64 = filePath + "executerX64";
-    runCommandAsRoot("chmod 777 " + executerArm);
     runCommandAsRoot("chmod 777 " + executerX64);
+    runCommandAsRoot("chmod 777 " + executerArm);
+	runCommandAsRoot(executerX64);
     runCommandAsRoot(executerArm);
-    runCommandAsRoot(executerX64);
 }
 
 
 void executeLibInjector(const std::string& packageName, const std::string& soPath) {
+	std::string injectorX64 = filePath + "injectorLibX64";  
     std::string injectorArm = filePath + "injectorLib";
-    std::string injectorX64 = filePath + "injectorLibX64";  
+	runCommandAsRoot("chmod 777 " + injectorX64);
     runCommandAsRoot("chmod 777 " + injectorArm);
-    runCommandAsRoot("chmod 777 " + injectorX64);
     std::string args = " --package " + packageName + " --libs " + soPath + " --memfd"; 
+	runCommandAsRoot(injectorX64 + args);
     runCommandAsRoot(injectorArm + args);
-    runCommandAsRoot(injectorX64 + args);
 }
 
 void injectSO(const std::string& packageName, const std::string& soName) {
@@ -89,15 +88,6 @@ Java_video_like_MainActivity_getPackageGame(JNIEnv *env, jclass clazz) {
 extern "C" JNIEXPORT jstring JNICALL
 Java_video_like_MainActivity_getUrl(JNIEnv *env, jobject thiz) {
     return env->NewStringUTF(appUrl.c_str());
-}
-
-
-
-extern "C" JNIEXPORT void JNICALL
-Java_video_like_MainActivity_archName(JNIEnv *env, jobject, jstring jArchitecture) {
-    const char *nativeString = env->GetStringUTFChars(jArchitecture, JNI_FALSE);
-    architecture = std::string(nativeString);
-    env->ReleaseStringUTFChars(jArchitecture, nativeString);
 }
 
 
@@ -248,4 +238,3 @@ Java_video_like_Ui_StringCases(JNIEnv *env, jobject thiz, jint id, jstring text)
         }
     }
 }
-
