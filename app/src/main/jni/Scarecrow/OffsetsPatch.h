@@ -8,6 +8,7 @@
 #include <sys/utsname.h>
 #include <errno.h>
 #include <stdbool.h>
+#include <elf.h>
 
 typedef const char* PACKAGENAME4patch;
 
@@ -103,53 +104,115 @@ int getPID(PACKAGENAME4patch PackageName) {
     return found_pid;
 }
 
+static bool parseOffset(const char *s, long *out) {
+    if (!s || !out) return false;
+    while (isspace((unsigned char)*s)) s++;
+    bool neg = false;
+    if (*s == '-') { neg = true; s++; }
+    else if (*s == '+') s++;
+    if (s[0] == '0' && (s[1] == 'x' || s[1] == 'X')) s += 2;
+    if (!isxdigit((unsigned char)*s)) return false;
+
+    char *end = NULL;
+    errno = 0;
+    unsigned long v = strtoul(s, &end, 16);
+    if (errno != 0) return false;
+    while (*end == 'h' || *end == 'H' || isspace((unsigned char)*end)) end++;
+    if (*end != '\0') return false;
+
+    *out = neg ? -(long)v : (long)v;
+    return true;
+}
+
+static bool parseModifier(const char *s, long *out) {
+    if (!out) return false;
+    *out = 0;
+    if (!s) return true;
+    while (isspace((unsigned char)*s)) s++;
+    if (*s == '\0') return true;
+    return parseOffset(s, out);
+}
+
+static int elfLoadBias(int memfd, unsigned long map_start, long *bias_out) {
+    Elf64_Ehdr eh;
+    if (pread64(memfd, &eh, sizeof(eh), (off64_t)map_start) != (ssize_t)sizeof(eh)) return -1;
+    if (memcmp(eh.e_ident, ELFMAG, SELFMAG) != 0) return 0;
+    if (eh.e_ident[EI_CLASS] != ELFCLASS64) { *bias_out = (long)map_start; return 1; }
+    if (eh.e_phentsize != sizeof(Elf64_Phdr) || eh.e_phnum == 0 || eh.e_phnum > 64) return -1;
+
+    Elf64_Phdr ph[64];
+    size_t ph_bytes = (size_t)eh.e_phnum * sizeof(Elf64_Phdr);
+    if (pread64(memfd, ph, ph_bytes, (off64_t)(map_start + eh.e_phoff)) != (ssize_t)ph_bytes) return -1;
+
+    for (int i = 0; i < eh.e_phnum; i++) {
+        if (ph[i].p_type == PT_LOAD) {
+            *bias_out = (long)map_start - (long)(ph[i].p_vaddr - ph[i].p_offset);
+            return 1;
+        }
+    }
+    return -1;
+}
+
 int getSharedLibMulti(int pid, const char *module_name, long *addrs_out, char *module_path_out, size_t path_out_size) {
     FILE *fp;
     char filepath[64];
     char buff[512];
     int count = 0;
 
+    if (!module_name || !*module_name) return 0;
+
     snprintf(filepath, sizeof(filepath), "/proc/%d/maps", pid);
     fp = fopen(filepath, "r");
-    if (fp) {
-        while (!feof(fp) && fgets(buff, sizeof(buff), fp)) {
-            if (strstr(buff, module_name) != NULL) {
-                
-                long addr = 0;
-                long file_offset = 0;
-               
-                if (sscanf(buff, "%lx-%*lx %*s %lx", &addr, &file_offset) == 2) {                
-                    if (file_offset == 0) {                     
-                        bool already_exists = false;
-                        for (int i = 0; i < count; i++) {
-                            if (addrs_out[i] == addr) {
-                                already_exists = true;
-                                break;
-                            }
-                        }
+    if (!fp) return 0;
 
-                        if (!already_exists && count < MAX_FOUND_MODULES) {
-                            addrs_out[count] = addr;
-                            
-                            if (count == 0) {
-                                char *path_start = strchr(buff, '/');
-                                if (path_start) {
-                                    char *path_end = path_start + strlen(path_start) - 1;
-                                    while(path_end > path_start && isspace((unsigned char)*path_end)) {
-                                        *path_end-- = '\0';
-                                    }                  
-                                    strncpy(module_path_out, path_start, path_out_size - 1);
-                                    module_path_out[path_out_size - 1] = '\0';
-                                }
-                            }
-                            count++;
-                        }
-                    }
-                }
-            }
+    snprintf(filepath, sizeof(filepath), "/proc/%d/mem", pid);
+    int memfd = open(filepath, O_RDONLY);
+
+    bool name_has_slash = strchr(module_name, '/') != NULL;
+
+    while (fgets(buff, sizeof(buff), fp)) {
+        if (strstr(buff, module_name) == NULL) continue;
+
+        unsigned long start = 0, file_offset = 0;
+        char perms[8] = {0};
+        if (sscanf(buff, "%lx-%*lx %7s %lx", &start, perms, &file_offset) != 3) continue;
+        if (file_offset != 0) continue;
+
+        char *path_start = strchr(buff, '/');
+        if (!path_start) continue;
+        char *path_end = path_start + strlen(path_start) - 1;
+        while (path_end > path_start && isspace((unsigned char)*path_end)) *path_end-- = '\0';
+
+        if (!name_has_slash) {
+            const char *base = strrchr(path_start, '/');
+            base = base ? base + 1 : path_start;
+            if (strstr(base, module_name) == NULL) continue;
         }
-        fclose(fp);
+
+        long base_addr = (long)start;
+        if (memfd != -1) {
+            long bias = 0;
+            int r = elfLoadBias(memfd, start, &bias);
+            if (r == 0) continue;
+            if (r == 1) base_addr = bias;
+        }
+
+        bool already_exists = false;
+        for (int i = 0; i < count; i++) {
+            if (addrs_out[i] == base_addr) { already_exists = true; break; }
+        }
+        if (already_exists || count >= MAX_FOUND_MODULES) continue;
+
+        addrs_out[count] = base_addr;
+        if (count == 0 && module_path_out && path_out_size > 0) {
+            strncpy(module_path_out, path_start, path_out_size - 1);
+            module_path_out[path_out_size - 1] = '\0';
+        }
+        count++;
     }
+
+    if (memfd != -1) close(memfd);
+    fclose(fp);
     return count;
 }
 
@@ -399,12 +462,14 @@ int hexPatch(PACKAGENAME4patch packageName, const char *offsetHex, const char *h
     }
 
     int result = -1;
-    long offset = strtol(offsetHex, NULL, 0); 
-    
-    if (offsetModifierStr != NULL) {
-        long modifier = strtol(offsetModifierStr, NULL, 0);
-        offset += modifier;
+    long offset = 0, modifier = 0;
+    if (!parseOffset(offsetHex, &offset) || !parseModifier(offsetModifierStr, &modifier)) {
+        free(patch_bytes);
+        close(mem_handle);
+        mem_handle = -1;
+        return -1;
     }
+    offset += modifier;
 
     for (int i = 0; i < modules_count; i++) {
         long target_address = module_bases[i] + offset;
@@ -426,63 +491,39 @@ int resPatch(PACKAGENAME4patch packageName, const char *offsetHex, const char *o
     int pid = getPID(packageName);
     if (pid == 0) return -1;
 
-    char module_filepath[256];
     long module_bases[MAX_FOUND_MODULES];
-    int modules_count = getSharedLibMulti(pid, moduleName, module_bases, module_filepath, sizeof(module_filepath));
-    
+    int modules_count = getSharedLibMulti(pid, moduleName, module_bases, NULL, 0);
     if (modules_count == 0) return -1;
-    long offset = strtol(offsetHex, NULL, 0); 
-    if (offsetModifierStr != NULL) {
-        long modifier = strtol(offsetModifierStr, NULL, 0);
-        offset += modifier;
-    }
+
+    long offset = 0, modifier = 0;
+    if (!parseOffset(offsetHex, &offset) || !parseModifier(offsetModifierStr, &modifier)) return -1;
+    offset += modifier;
 
     char mem_path[64];
     snprintf(mem_path, sizeof(mem_path), "/proc/%d/mem", pid);
     mem_handle = open(mem_path, O_RDWR);
     if (mem_handle == -1) return -1;
-    
+
     int result = -1;
-    bool restored_from_backup = false;
-    
     for (int i = 0; i < modules_count; i++) {
         long target_address_ram = module_bases[i] + offset;
-        
+
         BackupNode *curr = backup_list;
         while (curr) {
             if (curr->address == target_address_ram) {
                 if (WriteBaseHex(target_address_ram, curr->original_bytes, curr->size) == 0) {
                     result = 0;
-                    restored_from_backup = true;
                 }
                 break;
             }
             curr = curr->next;
         }
     }
-    
-    if (!restored_from_backup) {
-        size_t rollback_size = 12; 
-        unsigned char *file_bytes = (unsigned char *)malloc(rollback_size);
-        
-        if (file_bytes) {
-            if (readBytesFromLib(module_filepath, offset, file_bytes, rollback_size) == 0) {
-                for (int i = 0; i < modules_count; i++) {
-                    long target_address_ram = module_bases[i] + offset;
-                    if (WriteBaseHex(target_address_ram, file_bytes, rollback_size) == 0) {
-                        result = 0;
-                    }
-                }
-            }
-            free(file_bytes);
-        }
-    }
-    
+
     close(mem_handle);
     mem_handle = -1;
     return result;
 }
-
 
 
 int hookMethod(PACKAGENAME4patch packageName, const char *offset1Hex, const char *offset2Hex, const char *moduleName) {
@@ -494,8 +535,8 @@ int hookMethod(PACKAGENAME4patch packageName, const char *offset1Hex, const char
     int modules_count = getSharedLibMulti(pid, moduleName, module_bases, temp_path, sizeof(temp_path));
     if (modules_count == 0) return -1;
 
-    long offset1 = strtol(offset1Hex, NULL, 0); 
-    long offset2 = strtol(offset2Hex, NULL, 0);
+    long offset1 = 0, offset2 = 0;
+    if (!parseOffset(offset1Hex, &offset1) || !parseOffset(offset2Hex, &offset2)) return -1;
     
     long distance_bytes = offset2 - offset1;
     long distance_instructions = distance_bytes / 4; 
@@ -531,7 +572,6 @@ int hookMethod(PACKAGENAME4patch packageName, const char *offset1Hex, const char
 }
 
 
-
 int hookField(PACKAGENAME4patch packageName, const char *offsetHex, const char *valStr, const char *offset2Hex, const char *moduleName) {
     int pid = getPID(packageName);
     if (pid == 0) return -1;
@@ -541,8 +581,8 @@ int hookField(PACKAGENAME4patch packageName, const char *offsetHex, const char *
     int modules_count = getSharedLibMulti(pid, moduleName, module_bases, temp_path, sizeof(temp_path));
     if (modules_count == 0) return -1;
 
-    long offset = strtol(offsetHex, NULL, 0); 
-    long offset2 = strtol(offset2Hex, NULL, 0);
+    long offset = 0, offset2 = 0;
+    if (!parseOffset(offsetHex, &offset) || !parseOffset(offset2Hex, &offset2)) return -1;
     if (offset2 < 0 || offset2 > 0x3FFC || offset2 % 4 != 0) return -1; 
 
     unsigned int final_value_raw = 0;
@@ -600,4 +640,3 @@ int hookField(PACKAGENAME4patch packageName, const char *offsetHex, const char *
     close(mem_handle);
     return result;
 }
-
