@@ -95,7 +95,7 @@ injectSO(packageName, "libmain.so");
 ---
 
 ## Известные проблемы и баги
-На эмуляторах не работает hookMethod и hookField
+На эмуляторах не работает hookMethod и hookField.
 
 Failed socket connection: Бывает при частых перезаходах, просто перезапустите приложение.
 
