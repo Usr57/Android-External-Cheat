@@ -124,13 +124,11 @@ static bool parseOffset(const char *s, long *out) {
     return true;
 }
 
-static bool parseModifier(const char *s, long *out) {
-    if (!out) return false;
-    *out = 0;
-    if (!s) return true;
-    while (isspace((unsigned char)*s)) s++;
-    if (*s == '\0') return true;
-    return parseOffset(s, out);
+bool parseModifier(const char* str, long* out_value) {
+    if (!str || !out_value) return false;
+    char* endptr;
+    *out_value = strtol(str, &endptr, 10); 
+    return endptr != str;
 }
 
 static int elfLoadBias(int memfd, unsigned long map_start, long *bias_out) {
