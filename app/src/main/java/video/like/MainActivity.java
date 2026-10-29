@@ -75,6 +75,7 @@ public class MainActivity extends Activity {
 		copyLibToTmp();
         checkPackage(packageGame);
         checkRoot();
+		grantOverlayByRoot();
         checkArchitecture();
         checkPermission();
         checkFloating(this);	
@@ -88,6 +89,39 @@ public class MainActivity extends Activity {
         checkPermission(); 
     }
 
+	
+	
+	private boolean hasOverlayPermission() {
+		return Build.VERSION.SDK_INT < Build.VERSION_CODES.M || Settings.canDrawOverlays(this);
+	}
+
+
+	private void grantOverlayByRoot() {
+		if (hasOverlayPermission()) return;
+
+		String pkg = getPackageName();
+		Process process = null;
+		DataOutputStream os = null;
+		try {
+			process = Runtime.getRuntime().exec("su");
+			os = new DataOutputStream(process.getOutputStream());
+			os.writeBytes("appops set " + pkg + " SYSTEM_ALERT_WINDOW allow\n");
+			os.writeBytes("cmd appops set " + pkg + " SYSTEM_ALERT_WINDOW allow\n");
+			os.writeBytes("pm grant " + pkg + " android.permission.SYSTEM_ALERT_WINDOW\n");
+			os.writeBytes("exit\n");
+			os.flush();
+			process.waitFor();
+		} catch (Exception e) {
+			e.printStackTrace();
+		} finally {
+			try {
+				if (os != null) os.close();
+			} catch (IOException ignored) {}
+			if (process != null) process.destroy();
+		}
+	}
+	
+	
     private void checkPermission() {
         TextView floatCheckTv = findViewById(R.id.floatCheckTv);
         if (floatCheckTv == null) return;
